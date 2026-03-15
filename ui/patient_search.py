@@ -33,9 +33,12 @@ from utils.date_utils import (
     format_for_display,
     format_for_storage,
     parse_date as parse_date_flex,
+    EMPTY_DATE_SENTINEL,
+    EMPTY_DATE_SENTINEL_ALT,
 )
 from services.change_logger import log_change
 from services.motivator_service import get_all_motivator_names
+from services.visit_scheduler import UPCOMING_DAYS, EDD_UPCOMING_DAYS, VISIT_INTERVAL_DAYS, get_next_visit_due
 from ui.patient_entry import PatientEntryDialog
 
 
@@ -51,24 +54,29 @@ class DateEditDelegate(QStyledItemDelegate):
         editor.setCalendarPopup(True)
         editor.setDisplayFormat(self._date_format)
         editor.setFrame(False)
+        editor.setMinimumDate(QDate(EMPTY_DATE_SENTINEL.year, EMPTY_DATE_SENTINEL.month, EMPTY_DATE_SENTINEL.day))
+        editor.setSpecialValueText("")
         return editor
 
     def setEditorData(self, editor, index):
         val = index.model().data(index, Qt.EditRole)
         if val:
             d = parse_date_flex(val)
-            if d:
+            if d and d != EMPTY_DATE_SENTINEL and d != EMPTY_DATE_SENTINEL_ALT:
                 editor.setDate(QDate(d.year, d.month, d.day))
                 return
-        editor.setDate(QDate.currentDate())
+        editor.setDate(QDate(EMPTY_DATE_SENTINEL.year, EMPTY_DATE_SENTINEL.month, EMPTY_DATE_SENTINEL.day))
 
     def setModelData(self, editor, model, index):
         qd = editor.date()
-        model.setData(
-            index,
-            qd.toString(self._date_format) if qd.isValid() else "",
-            Qt.EditRole,
-        )
+        if not qd.isValid():
+            model.setData(index, "", Qt.EditRole)
+            return
+        qd_py = date(qd.year(), qd.month(), qd.day())
+        if qd_py == EMPTY_DATE_SENTINEL or qd_py == EMPTY_DATE_SENTINEL_ALT:
+            model.setData(index, "", Qt.EditRole)
+        else:
+            model.setData(index, qd.toString(self._date_format), Qt.EditRole)
 
     def updateEditorGeometry(self, editor, option, index):
         editor.setGeometry(option.rect)
@@ -246,9 +254,8 @@ class PatientSearchDialog(QDialog):
         # Load all patients initially
         self._load_all_patients()
 
-        # Date filter - show/hide from-to, trigger filter on change
+        # Date filter - show/hide from-to, trigger filter on change (connected at line 123)
         self._on_date_filter_changed(self.date_filter_combo.currentText())
-        self.date_filter_combo.currentTextChanged.connect(self._on_date_filter_changed)
         self.from_date_edit.dateChanged.connect(self._apply_filters)
         self.to_date_edit.dateChanged.connect(self._apply_filters)
 
@@ -326,8 +333,8 @@ class PatientSearchDialog(QDialog):
 
     def _apply_filters(self) -> None:
         today = date.today()
-        upcoming_limit = today + timedelta(days=7)
-        edd_limit = today + timedelta(days=30)
+        upcoming_limit = today + timedelta(days=UPCOMING_DAYS)
+        edd_limit = today + timedelta(days=EDD_UPCOMING_DAYS)
 
         name_f = self.name_filter.text().strip().lower()
         pid_f = self.patient_id_filter.text().strip().lower()
@@ -396,16 +403,23 @@ class PatientSearchDialog(QDialog):
                     return False
 
             if self._filter_mode == "due_soon":
-                visits = [parse_date(visit1), parse_date(visit2), parse_date(visit3), parse_date(final_visit)]
-                future = [d for d in visits if d and d >= today]
-                if not future:
-                    return False
-                next_visit = min(future)
-                if not (today <= next_visit <= upcoming_limit):
+                v1, v2, v3, v4 = parse_date(visit1), parse_date(visit2), parse_date(visit3), parse_date(final_visit)
+                future = [d for d in (v1, v2, v3, v4) if d and d > today]
+                if future:
+                    next_due = min(future)
+                else:
+                    if v4 and v4 <= today:
+                        return False  # Final done = no next visit
+                    completed = [d for d in (v1, v2, v3, v4) if d and d <= today]
+                    if not completed:
+                        return False
+                    next_due = max(completed) + timedelta(days=VISIT_INTERVAL_DAYS)
+                if not (today <= next_due <= upcoming_limit):
                     return False
             elif self._filter_mode == "overdue":
-                visits = [parse_date(visit1), parse_date(visit2), parse_date(visit3), parse_date(final_visit)]
-                if not any(d and d < today for d in visits):
+                v1, v2, v3, v4 = parse_date(visit1), parse_date(visit2), parse_date(visit3), parse_date(final_visit)
+                next_due = get_next_visit_due(v1, v2, v3, v4, today)
+                if not next_due or next_due >= today:
                     return False
             elif self._filter_mode == "edd_30":
                 edd = parse_date(edd_date)

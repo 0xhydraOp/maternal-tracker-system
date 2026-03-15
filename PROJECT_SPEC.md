@@ -1,351 +1,354 @@
-PROJECT_SPEC.md
 # Maternal Patient Tracking System
 
 ## Overview
 
 This project is an offline desktop application used to track maternal patients and their scheduled check-up visits.
 
-The application must run entirely offline and later be compiled into a Windows `.exe`.
+The application runs entirely offline and is compiled into a Windows `.exe` using PyInstaller.
 
-Technology stack:
-
+**Technology stack:**
 - Python
 - PySide6 (GUI framework)
 - SQLite (database)
+- pandas + openpyxl (Excel export/import)
 - PyInstaller (for creating `.exe`)
 
----
-
-# Core Features
-
-The system will manage:
-
-- Patient records
-- Motivator tracking
-- Visit scheduling
-- Visit reminders
-- Role-based access
-- Change logs
-- Backup system
-- Reporting
+**Date format (everywhere across the board):**
+- **Display:** `dd-mm-yyyy` (e.g. 15-03-2026) — all UI, tables, reports, exports
+- **Storage:** `yyyy-mm-dd` (ISO) — database only, internal use
 
 ---
 
-# Patient Data Fields
+## Core Features
 
-Each patient record must contain the following fields:
-
-Serial Number (auto generated)
-
-Patient Name
-
-Patient ID (must be unique)
-
-Mobile Number
-
-LMP Date (Last Menstrual Period)
-
-EDD Date (Expected Delivery Date)
-
-Motivator Name
-
-1st Visit
-
-2nd Visit
-
-3rd Visit
-
-Final Visit
-
-Entry Date
-
-Final Motivator Name
+The system manages:
+- Patient records (with village, motivator, remarks)
+- Motivator tracking (built-in + custom motivators)
+- Visit scheduling (1st, 2nd, 3rd, Final Visit)
+- Visit reminders (due soon, overdue)
+- Role-based access (ADMIN / STAFF)
+- Change logs (all field edits)
+- Activity log (admin actions)
+- Backup system (automatic daily + manual)
+- Reporting (Patient List, Visit Completion, Motivator Performance, Monthly Summary, Charts)
+- Excel export and import
+- Dark / light theme
 
 ---
 
-# Automatic Calculations
+## Patient Data Fields
 
-EDD must be calculated automatically.
+Each patient record contains:
 
-EDD = LMP + 280 days
-
-Users should not manually enter EDD.
-
----
-
-# Visit Scheduling Logic
-
-Visit scheduling follows this rule:
-
-1st Visit → entered manually
-
-2nd Visit = 1st Visit + 60 days
-
-3rd Visit = 2nd Visit + 60 days
-
-Final Visit = 3rd Visit + 60 days
-
----
-
-# Visit Edit Rule
-
-If any visit date is edited manually:
-
-All later visits must automatically recalculate.
-
-Example:
-
-If 2nd Visit changes,
-then 3rd Visit and Final Visit must update automatically.
+| Field | Description |
+|-------|-------------|
+| Serial Number | Auto-generated |
+| Patient Name | Required |
+| Patient ID | Unique, auto-generated (PT&lt;seq&gt;-&lt;MM&gt;-&lt;YYYY&gt;) |
+| Mobile Number | Required |
+| Village Name | Required |
+| LMP Date | Last Menstrual Period, required |
+| EDD Date | Expected Delivery Date (auto-calculated from LMP) |
+| Motivator Name | Required |
+| 1st Visit | Same as Entry Date (read-only) |
+| 2nd Visit | Date (manual entry) |
+| 3rd Visit | Date (manual entry) |
+| Final Visit | Date (manual entry; locks record when set) |
+| Entry Date | Registration date (read-only in Patient Entry) |
+| Remarks | Optional notes |
+| Record Locked | 0 or 1 (set when Final Visit is entered) |
 
 ---
 
-# Validation Rules
+## Automatic Calculations
 
-Patient ID must be unique.
-
-If the system detects a duplicate Patient ID:
-
-The record must NOT be saved.
-
-Phone numbers are allowed to repeat.
+- **EDD** = LMP + 280 days (calculated automatically from LMP; user may override)
+- **1st Visit** = Entry Date (always; not editable separately)
+- **2nd, 3rd, Final Visit** = entered manually by user
 
 ---
 
-# Record Locking
+## Validation Rules
 
-Once Final Visit is entered:
-
-The patient record becomes locked.
-
-Locked records cannot be modified by STAFF users.
-
-Only ADMIN users can unlock records.
+- Patient ID must be unique (auto-generated on new registration)
+- Duplicate Patient ID prevents save
+- Duplicate detection for new patients: same name + mobile (digits normalized) or same name + village
+- Mobile: 10–15 digits
+- LMP date cannot be in the future
+- Phone numbers may repeat
 
 ---
 
-# User Roles
+## Record Locking
 
-The system must support two user roles.
+- When **Final Visit** is entered, the record becomes locked
+- **STAFF** cannot edit locked records (including inline edits in Patient Search)
+- Only **ADMIN** can unlock records (via Administration → Patient Management → Unlock)
 
-## ADMIN
+---
 
-Admins can:
+## User Roles
 
-- Add patients
-- Edit all records
+### ADMIN
+- Add and edit all patient records
 - Unlock locked records
+- Manage users (add, edit, delete); cannot delete the last administrator
 - View change logs
-- Manage users
+- Manage custom motivators
 - View reports
-- Trigger manual backup
+- Trigger manual backup and restore
+- Change settings (admin password, backup folder, dark mode)
+- Delete patients
 
-## STAFF
-
-Staff users can:
-
+### STAFF
 - Add patients
-- Update visit dates
-- Search records
+- Update visit dates and remarks (inline in Patient Search, or via Patient Entry)
+- Search and export records
 - View reports
-
-Staff users cannot:
-
-- Edit Patient ID
-- Delete records
-- Unlock locked records
-- View change logs
+- Cannot edit locked records, delete patients, unlock records, or access Administration
 
 ---
 
-# Change Log System
+## Change Log System
 
-All edits must be recorded.
+All edits to patient records are logged in `change_logs`:
+- Patient ID
+- Field name
+- Old value
+- New value
+- Changed by (username)
+- Change time
 
-When a visit date is changed:
-
-The system must log:
-
-Patient ID  
-Field Name  
-Old Value  
-New Value  
-Changed By  
-Change Time
-
-Logs are stored in a table called:
-
-change_logs
+Logged fields: patient_name, mobile_number, village_name, lmp_date, edd_date, motivator_name, visit1, visit2, visit3, final_visit, entry_date, remarks, record_locked.
 
 ---
 
-# Dashboard
+## Dashboard
 
-The dashboard must display the following statistics:
-
-Patients with visits due within 7 days
-
-Overdue visits
-
-EDD within 30 days
-
-Entries created today
-
-Each statistic should be clickable to open the relevant records.
+Statistics cards (clickable to open filtered Patient Search):
+- **Next Visit Due This Week** – next scheduled visit (by 60-day rule) is within 7 days
+- **Overdue Visits** – next scheduled visit (by 60-day rule) is in the past (matches Patient Search filter)
+- **EDD Within 30 Days** – expected delivery in next 30 days
+- **Today's Entries** – patients registered today
 
 ---
 
-# Visit Reminder Logic
+## Patient Search
 
-Visits must be classified as:
-
-Upcoming (within 7 days)
-
-Overdue (date already passed)
-
-Completed
-
-These should be visually highlighted.
-
-Example:
-
-Red → overdue  
-Orange → due soon  
-Green → completed
+- Filters: Patient Name, Patient ID, Mobile, Motivator, Village, Entry Date, Date Range
+- Column order: Serial No, Entry Date, Patient Name, Patient ID, Village, Mobile, Motivator, LMP Date, EDD Date, 1st Visit, 2nd Visit, 3rd Visit, Final Visit, Remarks
+- Inline editing: EDD, visit dates, and Remarks (double-click to edit)
+- Export to Excel (all or selected rows)
+- STAFF cannot edit locked records inline
 
 ---
 
-# Reports
+## Reports
 
-The system must allow filtering records by:
+Organized layout with filters in group boxes and result counts. Reports refresh automatically when navigating to the Reports tab.
 
-Entry Date
-
-Month
-
-Year
-
-Motivator
-
-Patient Name
-
-Reports must support export to Excel.
+- **Patient List** – filters (date range, month, year, motivator, patient name, village) in a compact group; Apply/Export buttons; result count; export to Excel; custom date range auto-swaps if From > To
+- **Visit Completion** – completion rates for 1st, 2nd, 3rd, Final Visit
+- **Motivator Performance** – patients and visit completion by motivator
+- **Monthly Summary** – registrations, visits, overdue, EDD, completed (last 12 months)
+- **Charts**:
+  - Registrations per month (12 months ending with selected month/year)
+  - Top Motivators – top 15 by patient count
+  - Motivator Month-wise Performance – select any motivator, view their registrations per month for past 12 months (month/year selector)
+  - Patients by Village – top 15
 
 ---
 
-# Database Structure
+## Backup System
 
-The system uses SQLite.
-
-## patients table
-
-id  
-serial_number  
-patient_name  
-patient_id (unique)  
-mobile_number  
-lmp_date  
-edd_date  
-motivator_name  
-visit1  
-visit2  
-visit3  
-final_visit  
-entry_date  
-final_motivator  
-record_locked  
-created_at
+- **Automatic daily backup** on app startup and every 24 hours
+- **Configurable backup folder** (Settings in Administration)
+- **Naming format:** `backup_YYYY_MM_DD.db`
+- Keeps latest 30 backups; older ones deleted automatically
+- **Manual backup** – save copy to user-chosen location
+- **Restore** – restore from a `.db` file
 
 ---
 
-## users table
+## Excel Import
 
-id  
-username  
-password_hash  
-role  
-created_at
-
----
-
-## change_logs table
-
-id  
-patient_id  
-field_name  
-old_value  
-new_value  
-changed_by  
-changed_at
+- Import patient records from Excel
+- Supported columns: patient name, mobile, village, lmp, edd, motivator, visit1–3, final visit, entry date, remarks, serial number
+- Patient ID auto-generated if not in file
+- Skips rows with missing patient name, missing mobile, invalid mobile (not 10–15 digits), or duplicate Patient ID
+- On duplicate Patient ID (IntegrityError): skips row if ID from Excel; retries with new auto-generated ID (up to 5 times) if ID was auto-generated
+- Returns imported count and skipped count
+- Saves copy of imported file to backup folder
 
 ---
 
-# Backup System
+## Database Structure
 
-The system must create automatic daily backups.
+### patients
+| Column | Type |
+|--------|------|
+| id | INTEGER PRIMARY KEY |
+| serial_number | INTEGER |
+| patient_name | TEXT NOT NULL |
+| patient_id | TEXT NOT NULL UNIQUE |
+| mobile_number | TEXT |
+| village_name | TEXT |
+| lmp_date | TEXT |
+| edd_date | TEXT |
+| motivator_name | TEXT |
+| visit1 | TEXT |
+| visit2 | TEXT |
+| visit3 | TEXT |
+| final_visit | TEXT |
+| entry_date | TEXT |
+| record_locked | INTEGER DEFAULT 0 |
+| remarks | TEXT |
+| created_at | TEXT |
 
-Backup files must be stored inside:
+### users
+| Column | Type |
+|--------|------|
+| id | INTEGER PRIMARY KEY |
+| username | TEXT NOT NULL UNIQUE |
+| password_hash | TEXT NOT NULL |
+| role | TEXT NOT NULL |
+| created_at | TEXT |
 
-/backups
+### change_logs
+| Column | Type |
+|--------|------|
+| id | INTEGER PRIMARY KEY |
+| patient_id | TEXT NOT NULL |
+| field_name | TEXT NOT NULL |
+| old_value | TEXT |
+| new_value | TEXT |
+| changed_by | TEXT NOT NULL |
+| changed_at | TEXT |
 
-Naming format:
+### custom_motivators
+| Column | Type |
+|--------|------|
+| name | TEXT PRIMARY KEY |
+| added_at | TEXT |
 
-backup_YYYY_MM_DD.db
-
-Example:
-
-backup_2026_03_12.db
-
-The system should keep the latest 30 backups only.
-
-Older backups may be deleted automatically.
-
----
-
-# Application Screens
-
-The program must include the following screens:
-
-Login Screen
-
-Dashboard
-
-Patient Entry Screen
-
-Patient Search Screen
-
-Record Viewer
-
-Change Log Viewer
-
-Admin User Management
-
-Backup Manager
-
-Reports Screen
-
----
-
-# Project Structure
-
-The project should follow this folder structure:
-
-main.py
-
-database/
-
-ui/
-
-models/
-
-services/
-
-backups/
+### activity_log
+| Column | Type |
+|--------|------|
+| id | INTEGER PRIMARY KEY |
+| action | TEXT NOT NULL |
+| details | TEXT |
+| performed_by | TEXT NOT NULL |
+| performed_at | TEXT NOT NULL |
 
 ---
 
-# Compilation
+## Application Screens
 
-The application must be compiled into a Windows executable using:
+- **Login** – username/password, default admin/admin123
+- **Dashboard** – stats cards, quick actions
+- **Patient Entry** – add/edit patient (full form); 1st Visit = Entry Date; motivator "Others" with "Please specify" field
+- **Patient Search** – filter, inline edit, export
+- **Reports** – Patient List, Visit Completion, Motivator Performance, Monthly Summary, Charts
+- **Backup Manager** – manual backup, restore, view backup folder
+- **Administration** (ADMIN only):
+  - User Management – add, edit, delete users; duplicate username shows validation message; cannot delete last admin
+  - Patient Management (edit, delete, unlock) – simplified table with filters
+  - Change Logs
+  - Custom Motivators
+  - Settings (admin password, backup folder, dark mode) – grouped in QGroupBox
 
-pyinstaller --onefile main.py
+---
+
+## Project Structure
+
+```
+maternal_tracking/
+├── main.py                 # Entry point
+├── config.py               # Config (admin password, dark mode, backup dir)
+├── config.json             # User settings (created at runtime)
+├── styles.py               # Light/dark theme stylesheets
+├── requirements.txt
+├── maternal_tracking.spec  # PyInstaller spec
+├── build_exe.ps1           # Build script for .exe
+├── build_installer.ps1     # Build Inno Setup installer
+├── database/
+│   ├── init_db.py          # Schema, migrations
+│   └── maternal_tracking.db  # Created at runtime
+├── ui/
+│   ├── dashboard.py
+│   ├── login_window.py
+│   ├── patient_entry.py
+│   ├── patient_search.py
+│   ├── reports.py
+│   ├── administration.py
+│   └── change_password_dialog.py
+├── services/
+│   ├── backup_service.py
+│   ├── change_logger.py
+│   ├── activity_logger.py
+│   ├── motivator_service.py
+│   ├── village_service.py
+│   ├── password_service.py
+│   ├── excel_import_service.py
+│   └── visit_scheduler.py
+├── utils/
+│   ├── date_utils.py
+│   └── icon_utils.py
+├── assets/
+│   ├── icon.png            # App icon (created at runtime if missing)
+│   └── icon.ico            # Windows icon (created by build script)
+├── scripts/
+│   ├── seed_patients.py
+│   └── create_icon_ico.py
+├── installer.iss           # Inno Setup script
+├── version_info.txt       # Windows exe version metadata
+├── LICENSE.txt            # Shown during installer
+├── WELCOME.txt            # Installer welcome text
+└── backups/               # Created at runtime
+```
+
+---
+
+## Compilation
+
+### Build executable only
+
+```powershell
+.\build_exe.ps1
+```
+
+Output: `MaternalTracking.exe` in the project folder.
+
+### Build installer (recommended for distribution)
+
+1. Install [Inno Setup 6](https://jrsoftware.org/isinfo.php)
+2. Run:
+
+```powershell
+.\build_installer.ps1
+```
+
+Output: `dist\MaternalTracker_Setup_1.0.0.exe` — a professional installer with:
+- Welcome screen
+- License agreement
+- Install location choice
+- Start Menu and optional Desktop shortcut
+- Uninstaller in Add/Remove Programs
+- App icon and version info on the .exe
+
+### Manual build
+
+```powershell
+pyinstaller --clean --noconfirm maternal_tracking.spec --distpath .
+```
+
+When run as `.exe`, config, database, and backups are stored next to the executable. The app detects frozen (compiled) mode and uses paths relative to the executable.
+
+---
+
+## Configuration
+
+Stored in `config.json` (created on first settings change):
+- `admin_area_password` – password for Administration Area
+- `dark_mode` – light or dark theme
+- `backup_dir` – path for backup files

@@ -44,3 +44,12 @@ Thumbs.db
 
 # Logs
 *.log
+
+# PyInstaller build
+build/
+dist/
+*.exe
+*.zip
+
+# Config (user-specific)
+config.json

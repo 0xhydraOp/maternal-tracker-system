@@ -36,7 +36,7 @@ from PySide6.QtWidgets import (
 
 from config import get_admin_area_password
 from database.init_db import get_connection
-from utils.date_utils import parse_date as parse_date_flex
+from utils.date_utils import parse_date as parse_date_flex, format_for_display
 from services.backup_service import (
     get_backup_dir_path,
     list_backups,
@@ -44,7 +44,12 @@ from services.backup_service import (
     restore_backup,
 )
 from services.excel_import_service import import_from_excel
-from services.visit_scheduler import UPCOMING_DAYS, EDD_UPCOMING_DAYS
+from services.visit_scheduler import (
+    UPCOMING_DAYS,
+    EDD_UPCOMING_DAYS,
+    VISIT_INTERVAL_DAYS,
+    get_next_visit_due,
+)
 from ui.administration import AdministrationWidget
 from ui.change_password_dialog import ChangePasswordDialog
 from ui.login_window import LoginWindow
@@ -87,6 +92,10 @@ class DashboardWindow(QMainWindow):
         sidebar = QFrame()
         sidebar.setObjectName("sidebar")
         sidebar.setFixedWidth(240)
+        sidebar.setStyleSheet(
+            "QFrame#sidebar { background-color: #1a1a2e; } "
+            "QFrame#sidebar QLabel { background-color: #1a1a2e; color: #ffffff; }"
+        )
 
         sidebar_layout = QVBoxLayout(sidebar)
         sidebar_layout.setContentsMargins(16, 16, 16, 16)
@@ -95,6 +104,9 @@ class DashboardWindow(QMainWindow):
         title_label = QLabel("Maternal Tracker System")
         title_label.setAlignment(Qt.AlignCenter)
         title_label.setObjectName("sidebarTitle")
+        title_label.setStyleSheet(
+            "background-color: #1a1a2e; color: #ffffff; font-size: 16px; font-weight: bold; padding: 10px;"
+        )
 
         sidebar_layout.addWidget(title_label)
 
@@ -136,6 +148,9 @@ class DashboardWindow(QMainWindow):
         self.admin_btn.setObjectName("navButton")
         self.admin_btn.clicked.connect(self._open_administration)
         self.admin_btn.setVisible(self.role.upper() == "ADMIN")
+
+        is_admin = self.role.upper() == "ADMIN"
+        self.backup_btn.setVisible(is_admin)  # Backup/restore/import: ADMIN only per spec
 
         for btn in (
             self.dashboard_btn,
@@ -198,30 +213,41 @@ class DashboardWindow(QMainWindow):
         header_style = self.style()
         header_bar = QFrame()
         header_bar.setObjectName("appHeaderBar")
+        header_bar.setStyleSheet(
+            "QFrame#appHeaderBar { background-color: #2c3e50; } "
+            "QFrame#appHeaderBar QLabel, QFrame#appHeaderBar QFrame { "
+            "background-color: #2c3e50; color: white; border: none; }"
+        )
         header_layout = QHBoxLayout(header_bar)
         header_layout.setContentsMargins(20, 12, 24, 12)
         self.header_datetime_label = QLabel()
         self.header_datetime_label.setObjectName("headerDateTime")
         self.header_datetime_label.setMinimumWidth(200)
-        self.header_datetime_label.setAutoFillBackground(False)
+        self.header_datetime_label.setStyleSheet(
+            "background-color: #2c3e50; color: white; font-size: 12px; border: none;"
+        )
         header_layout.addWidget(self.header_datetime_label)
         header_layout.addStretch()
-        title_container = QWidget()
-        title_container.setAutoFillBackground(False)
+        title_container = QFrame()
+        title_container.setObjectName("appTitleContainer")
+        title_container.setFrameShape(QFrame.NoFrame)
+        title_container.setStyleSheet("background-color: #2c3e50; border: none;")
         title_h = QHBoxLayout(title_container)
         title_h.setContentsMargins(0, 0, 0, 0)
         title_h.setSpacing(10)
         header_icon = QLabel()
-        header_icon.setAutoFillBackground(False)
         header_pix = header_style.standardPixmap(QStyle.SP_ComputerIcon)
         if not header_pix.isNull():
             header_icon.setPixmap(header_pix.scaled(28, 28, Qt.KeepAspectRatio, Qt.SmoothTransformation))
         header_icon.setFixedSize(32, 32)
         header_icon.setAlignment(Qt.AlignCenter)
+        header_icon.setStyleSheet("background-color: #2c3e50; border: none;")
         title_h.addWidget(header_icon)
         self.app_title_label = QLabel("Maternal Tracker System")
         self.app_title_label.setObjectName("appTitle")
-        self.app_title_label.setAutoFillBackground(False)
+        self.app_title_label.setStyleSheet(
+            "background-color: #2c3e50; color: white; font-size: 18px; font-weight: bold; border: none;"
+        )
         title_h.addWidget(self.app_title_label)
         header_layout.addWidget(title_container)
 
@@ -519,45 +545,23 @@ class DashboardWindow(QMainWindow):
         try:
             cur = conn.cursor()
 
-            # Next Visit Due This Week: count only when patient's NEXT visit (earliest future) is within 7 days
+            # Due soon & Overdue: use same logic as Patient Search (next visit by 60-day rule)
             cur.execute(
                 """
                 SELECT visit1, visit2, visit3, final_visit FROM patients
                 """
             )
             due_soon_count = 0
+            overdue_count = 0
             for row in cur.fetchall():
-                visit_dates = []
-                for v in row:
-                    if v:
-                        d = parse_date_flex(v)
-                        if d:
-                            visit_dates.append(d)
-                future = [d for d in visit_dates if d >= today]
-                if future:
-                    next_visit = min(future)
-                    if today <= next_visit <= upcoming_limit:
-                        due_soon_count += 1
-
-            # Overdue visits (any visit date before today)
-            cur.execute(
-                """
-                SELECT COUNT(*) FROM patients
-                WHERE (
-                    (visit1 IS NOT NULL AND visit1 < ?)
-                    OR (visit2 IS NOT NULL AND visit2 < ?)
-                    OR (visit3 IS NOT NULL AND visit3 < ?)
-                    OR (final_visit IS NOT NULL AND final_visit < ?)
-                )
-                """,
-                (
-                    today.isoformat(),
-                    today.isoformat(),
-                    today.isoformat(),
-                    today.isoformat(),
-                ),
-            )
-            overdue_count = cur.fetchone()[0] or 0
+                v1, v2, v3, v4 = (parse_date_flex(v) for v in row)
+                next_due = get_next_visit_due(v1, v2, v3, v4, today)
+                if not next_due:
+                    continue
+                if next_due < today:
+                    overdue_count += 1
+                elif today <= next_due <= upcoming_limit:
+                    due_soon_count += 1
 
             # EDD within 30 days
             cur.execute(
@@ -663,7 +667,9 @@ class DashboardWindow(QMainWindow):
 
     def _set_active_page(self, index: int) -> None:
         self.stack.setCurrentIndex(index)
-        if index == 4:
+        if index == 3:
+            self.reports_page.refresh_reports()
+        elif index == 4:
             self._refresh_backup_list()
 
         nav_buttons = [
@@ -701,15 +707,10 @@ class DashboardWindow(QMainWindow):
         backups = list_backups()
         self.backup_table.setRowCount(len(backups))
         for i, (path, date_str, size_bytes) in enumerate(backups):
-            # Format date as dd-mm-yyyy
-            try:
-                parts = date_str.split("-")
-                if len(parts) == 3:
-                    date_str = f"{parts[2]}-{parts[1]}-{parts[0]}"
-            except (IndexError, ValueError):
-                pass
+            d = parse_date_flex(date_str)
+            disp_date = format_for_display(d) if d else date_str
             size_str = f"{size_bytes / (1024*1024):.2f} MB" if size_bytes >= 1024*1024 else f"{size_bytes // 1024} KB"
-            self.backup_table.setItem(i, 0, QTableWidgetItem(date_str))
+            self.backup_table.setItem(i, 0, QTableWidgetItem(disp_date))
             self.backup_table.setItem(i, 1, QTableWidgetItem(size_str))
             self.backup_table.setItem(i, 2, QTableWidgetItem(path.name))
             self.backup_table.setItem(i, 3, QTableWidgetItem(str(path)))
@@ -837,11 +838,13 @@ class DashboardWindow(QMainWindow):
         if not path_item:
             return
         path = Path(path_item.text())
+        date_item = self.backup_table.item(row, 0)
+        date_str = date_item.text() if date_item else ""
         reply = QMessageBox.question(
             self,
             "Restore Backup",
             f"Are you sure you want to restore from backup?\n\n"
-            f"Date: {self.backup_table.item(row, 0).text()}\n\n"
+            f"Date: {date_str}\n\n"
             "This will replace the current database. The application will need to be restarted.",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No,

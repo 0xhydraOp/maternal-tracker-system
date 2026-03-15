@@ -15,6 +15,11 @@ DATE_FORMAT_DISPLAY = "dd-MM-yyyy"
 # Storage format for database (yyyy-mm-dd, ISO)
 DATE_FORMAT_STORAGE = "yyyy-MM-dd"
 
+# Sentinel for "no date" - display as empty (matches EMPTY_DATE_SENTINEL in patient_entry)
+EMPTY_DATE_SENTINEL = date(1900, 1, 1)
+# Also treat 2000-01-01 as empty (Excel/other sources may use this for blank dates)
+EMPTY_DATE_SENTINEL_ALT = date(2000, 1, 1)
+
 
 def parse_date(s: Optional[str]) -> Optional[date]:
     """
@@ -40,7 +45,9 @@ def parse_date(s: Optional[str]) -> Optional[date]:
 
 
 def format_for_display(d: date) -> str:
-    """Format date for display (dd-mm-yyyy)."""
+    """Format date for display (dd-mm-yyyy). Treat sentinel as empty."""
+    if d == EMPTY_DATE_SENTINEL or d == EMPTY_DATE_SENTINEL_ALT:
+        return ""
     return d.strftime("%d-%m-%Y")
 
 

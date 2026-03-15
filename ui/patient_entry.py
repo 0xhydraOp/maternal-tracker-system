@@ -28,10 +28,12 @@ from utils.date_utils import DATE_FORMAT_DISPLAY, parse_date as parse_date_flex
 from services.change_logger import log_change
 from services.motivator_service import add_custom_motivator, get_all_motivator_names
 from services.village_service import get_all_village_names
-from services.visit_scheduler import schedule_subsequent_visits
 
 
 MOTIVATOR_OTHERS = "Others"
+
+# Sentinel for "no date" in optional visit fields (3rd, Final) - displays as empty
+EMPTY_DATE_SENTINEL = QDate(1900, 1, 1)
 
 MOTIVATOR_NAMES: List[str] = [
     "SAJEM B.C LAB",
@@ -407,8 +409,9 @@ MOTIVATOR_NAMES: List[str] = [
 class PatientEntryDialog(QDialog):
     """
     Patient entry and edit dialog.
-    Supports automatic EDD calculation and visit scheduling rules.
-    Also writes change_logs entries when visit dates are modified.
+    Supports automatic EDD calculation.
+    1st Visit = Entry Date (read-only); 2nd, 3rd, Final Visit are manual.
+    Writes change_logs when visit dates are modified.
     """
 
     def __init__(self, username: str, role: str = "STAFF", parent=None):
@@ -505,12 +508,18 @@ class PatientEntryDialog(QDialog):
 
         self.motivator_other_edit = QLineEdit()
         self.motivator_other_edit.setPlaceholderText("Please specify")
-        self.motivator_other_edit.setVisible(False)
 
         self.visit1_edit = make_date_edit()
+        self.visit1_edit.setReadOnly(True)  # 1st Visit = Entry Date (always)
         self.visit2_edit = make_date_edit()
+        self.visit2_edit.setMinimumDate(EMPTY_DATE_SENTINEL)
+        self.visit2_edit.setSpecialValueText("")
         self.visit3_edit = make_date_edit()
+        self.visit3_edit.setMinimumDate(EMPTY_DATE_SENTINEL)
+        self.visit3_edit.setSpecialValueText("")
         self.final_visit_edit = make_date_edit()
+        self.final_visit_edit.setMinimumDate(EMPTY_DATE_SENTINEL)
+        self.final_visit_edit.setSpecialValueText("")
         self.remarks_edit = QLineEdit()
         self.remarks_edit.setPlaceholderText("Optional notes")
         self.entry_date_edit = make_date_edit()
@@ -627,11 +636,10 @@ class PatientEntryDialog(QDialog):
         self.entry_date_edit.setDate(QDate.currentDate())
         self.visit1_edit.setDate(self.entry_date_edit.date())
 
-        # Keep 2nd, 3rd, Final Visit blank (entered later from dashboard)
-        invalid = QDate()
-        self.visit2_edit.setDate(invalid)
-        self.visit3_edit.setDate(invalid)
-        self.final_visit_edit.setDate(invalid)
+        # Keep 2nd, 3rd, Final Visit blank (entered later)
+        self.visit2_edit.setDate(EMPTY_DATE_SENTINEL)  # Displays empty until user selects
+        self.visit3_edit.setDate(EMPTY_DATE_SENTINEL)  # Displays empty until user selects
+        self.final_visit_edit.setDate(EMPTY_DATE_SENTINEL)  # Displays empty until user selects
 
         # When Entry Date changes, update 1st Visit to match
         self.entry_date_edit.dateChanged.connect(self._update_first_visit)
@@ -716,8 +724,14 @@ class PatientEntryDialog(QDialog):
 
     def _on_motivator_changed(self, text: str) -> None:
         """Show 'Please specify' box when 'Others' is selected."""
-        self.motivator_specify_widget.setVisible(text == MOTIVATOR_OTHERS)
-        if text != MOTIVATOR_OTHERS:
+        is_others = text == MOTIVATOR_OTHERS
+        self.motivator_specify_widget.setVisible(is_others)
+        if is_others:
+            if not getattr(self, "_record_locked", False):
+                self.motivator_other_edit.setReadOnly(False)
+                self.motivator_other_edit.setEnabled(True)
+            self.motivator_other_edit.setFocus()
+        else:
             self.motivator_other_edit.clear()
 
     def _set_read_only(self, locked: bool) -> None:
@@ -726,6 +740,12 @@ class PatientEntryDialog(QDialog):
             if hasattr(w, "setReadOnly"):
                 w.setReadOnly(locked)
             w.setEnabled(not locked)
+        self.visit1_edit.setReadOnly(True)  # 1st Visit always = Entry Date (never editable)
+        # 2nd, 3rd, Final Visit must stay editable when record is not locked
+        if not locked:
+            self.visit2_edit.setReadOnly(False)
+            self.visit3_edit.setReadOnly(False)
+            self.final_visit_edit.setReadOnly(False)
         self.button_box.button(QDialogButtonBox.Save).setEnabled(not locked)
         if locked:
             self.unlock_check.setVisible(False)
@@ -738,26 +758,6 @@ class PatientEntryDialog(QDialog):
     def _update_first_visit(self, qdate: QDate) -> None:
         """When Entry Date changes, set 1st Visit to the same date."""
         self.visit1_edit.setDate(qdate)
-
-    def _update_visits_from(self, start_visit: int) -> None:
-        v1 = self._qdate_to_date(self.visit1_edit.date())
-        v2 = self._qdate_to_date(self.visit2_edit.date())
-        v3 = self._qdate_to_date(self.visit3_edit.date())
-        v4 = self._qdate_to_date(self.final_visit_edit.date())
-
-        if start_visit == 1:
-            v1, v2, v3, v4 = schedule_subsequent_visits(v1, None, None, None)
-        elif start_visit == 2:
-            v1, v2, v3, v4 = schedule_subsequent_visits(v1, v2, None, None)
-        elif start_visit == 3:
-            v1, v2, v3, v4 = schedule_subsequent_visits(v1, v2, v3, None)
-
-        if v2:
-            self.visit2_edit.setDate(self._date_to_qdate(v2))
-        if v3:
-            self.visit3_edit.setDate(self._date_to_qdate(v3))
-        if v4:
-            self.final_visit_edit.setDate(self._date_to_qdate(v4))
 
     def load_patient(self) -> None:
         patient_id = self.patient_id_edit.text().strip()
@@ -852,7 +852,7 @@ class PatientEntryDialog(QDialog):
             (self.lmp_edit, lmp_date_str),
             (self.edd_edit, edd_date_str),
             (self.entry_date_edit, entry_date_str),
-            (self.visit1_edit, visit1_str),
+            (self.visit1_edit, entry_date_str),  # 1st Visit = Entry Date
             (self.visit2_edit, visit2_str),
             (self.visit3_edit, visit3_str),
             (self.final_visit_edit, final_visit_str),
@@ -860,6 +860,8 @@ class PatientEntryDialog(QDialog):
             d = parse_date_flex(value)
             if d:
                 editor.setDate(self._date_to_qdate(d))
+            elif editor in (self.visit2_edit, self.visit3_edit, self.final_visit_edit):
+                editor.setDate(EMPTY_DATE_SENTINEL)  # Show empty until user selects
 
         self.remarks_edit.setText(remarks_str or "")
 
@@ -871,6 +873,13 @@ class PatientEntryDialog(QDialog):
     def _get_date_str(self, editor: QDateEdit) -> Optional[str]:
         d = self._qdate_to_date(editor.date())
         return d.isoformat() if d else None
+
+    def _get_optional_visit_date_str(self, editor: QDateEdit) -> Optional[str]:
+        """For 3rd/Final Visit: return None when empty (sentinel), else date string."""
+        qd = editor.date()
+        if not qd.isValid() or qd == EMPTY_DATE_SENTINEL:
+            return None
+        return date(qd.year(), qd.month(), qd.day()).isoformat()
 
     def save_patient(self) -> None:
         # Block STAFF from saving locked records
@@ -951,19 +960,28 @@ class PatientEntryDialog(QDialog):
             return
 
         # Duplicate detection for new patients: same name+mobile or name+village
+        # Use normalized digits for mobile comparison (handles "123 456 7890" vs "1234567890")
         if not self._loaded_patient_exists:
+            digits_only = "".join(c for c in mobile_number if c.isdigit())
             conn_check = get_connection()
             try:
                 cur_check = conn_check.cursor()
                 cur_check.execute(
                     """
-                    SELECT patient_id, patient_name FROM patients
-                    WHERE (LOWER(patient_name) = LOWER(?) AND mobile_number = ?)
-                       OR (LOWER(patient_name) = LOWER(?) AND LOWER(COALESCE(village_name,'')) = LOWER(?))
+                    SELECT patient_id, patient_name, mobile_number, village_name FROM patients
+                    WHERE LOWER(patient_name) = LOWER(?)
                     """,
-                    (patient_name, mobile_number, patient_name, village_name),
+                    (patient_name,),
                 )
-                dup = cur_check.fetchone()
+                dup = None
+                for row in cur_check.fetchall():
+                    pid, pname, db_mobile, db_village = row
+                    db_digits = "".join(c for c in (db_mobile or "") if c.isdigit())
+                    same_mobile = db_digits and digits_only and db_digits == digits_only
+                    same_village = (village_name or "").lower() == (db_village or "").lower()
+                    if same_mobile or same_village:
+                        dup = (pid, pname)
+                        break
             finally:
                 conn_check.close()
             if dup:
@@ -982,9 +1000,9 @@ class PatientEntryDialog(QDialog):
         lmp_date_str = self._get_date_str(self.lmp_edit)
         edd_date_str = self._get_date_str(self.edd_edit)
         visit1_str = self._get_date_str(self.visit1_edit)
-        visit2_str = self._get_date_str(self.visit2_edit)
-        visit3_str = self._get_date_str(self.visit3_edit)
-        final_visit_str = self._get_date_str(self.final_visit_edit)
+        visit2_str = self._get_optional_visit_date_str(self.visit2_edit)
+        visit3_str = self._get_optional_visit_date_str(self.visit3_edit)
+        final_visit_str = self._get_optional_visit_date_str(self.final_visit_edit)
         entry_date_str = self._get_date_str(self.entry_date_edit)
 
         conn = get_connection()
@@ -1024,11 +1042,11 @@ class PatientEntryDialog(QDialog):
                     today = date.today()
                     entry_date_str = today.isoformat()
 
-                # 1st Visit = Entry Date; 2nd/3rd/Final remain blank
+                # Use visit dates from form (visit1 = Entry Date; 2nd/3rd/Final can be entered)
                 visit1_str = self._get_date_str(self.visit1_edit)
-                visit2_str = None
-                visit3_str = None
-                final_visit_str = None
+                visit2_str = self._get_optional_visit_date_str(self.visit2_edit)
+                visit3_str = self._get_optional_visit_date_str(self.visit3_edit)
+                final_visit_str = self._get_optional_visit_date_str(self.final_visit_edit)
 
                 cur.execute("SELECT COALESCE(MAX(serial_number), 0) + 1 FROM patients")
                 serial_number = cur.fetchone()[0] or 1

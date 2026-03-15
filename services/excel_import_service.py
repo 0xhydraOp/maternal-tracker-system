@@ -5,6 +5,7 @@ Adds records to the database and saves a copy of the Excel file to the backup fo
 from __future__ import annotations
 
 import shutil
+import sqlite3
 from datetime import date, datetime
 from pathlib import Path
 from typing import Optional
@@ -13,7 +14,7 @@ import pandas as pd
 
 from database.init_db import get_connection
 from services.backup_service import get_backup_dir_path
-from utils.date_utils import parse_date, format_for_storage
+from utils.date_utils import parse_date, format_for_storage, EMPTY_DATE_SENTINEL, EMPTY_DATE_SENTINEL_ALT
 
 
 # Column name mappings: Excel header -> DB field
@@ -50,14 +51,17 @@ def _to_date(val) -> Optional[str]:
     if val is None or (isinstance(val, float) and pd.isna(val)):
         return None
     if isinstance(val, date):
-        return format_for_storage(val)
-    if isinstance(val, datetime):
-        return format_for_storage(val.date())
-    s = str(val).strip()
-    if not s:
+        d = val
+    elif isinstance(val, datetime):
+        d = val.date()
+    else:
+        s = str(val).strip()
+        if not s:
+            return None
+        d = parse_date(s)
+    if not d or d == EMPTY_DATE_SENTINEL or d == EMPTY_DATE_SENTINEL_ALT:
         return None
-    d = parse_date(s)
-    return format_for_storage(d) if d else None
+    return format_for_storage(d)
 
 
 def _to_str(val) -> Optional[str]:
@@ -123,6 +127,10 @@ def import_from_excel(
             "Supported headers: patient name, mobile, village, lmp, edd, motivator, visit1, visit2, visit3, final visit, entry date. "
             "Patient ID is auto-generated when not provided."
         )
+    if not col_mobile:
+        raise ValueError(
+            "Excel must have a 'Mobile' column (required, 10-15 digits)."
+        )
 
     conn = get_connection()
     imported = 0
@@ -135,6 +143,15 @@ def import_from_excel(
         for idx, row in df.iterrows():
             patient_name = _to_str(row.get(col_patient_name))
             if not patient_name:
+                skipped += 1
+                continue
+
+            mobile = _to_str(row.get(col_mobile)) if col_mobile else None
+            if not mobile:
+                skipped += 1
+                continue
+            digits = "".join(c for c in mobile if c.isdigit())
+            if len(digits) < 10 or len(digits) > 15:
                 skipped += 1
                 continue
 
@@ -157,33 +174,48 @@ def import_from_excel(
             except (ValueError, TypeError):
                 serial_int = None
 
-            cur.execute(
-                """
-                INSERT INTO patients (
-                    serial_number, patient_name, patient_id, mobile_number, village_name,
-                    lmp_date, edd_date, motivator_name, visit1, visit2, visit3, final_visit,
-                    entry_date, record_locked, created_at, remarks
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
-                """,
-                (
-                    serial_int,
-                    patient_name,
-                    patient_id,
-                    _to_str(row.get(col_mobile)),
-                    _to_str(row.get(col_village)),
-                    _to_date(row.get(col_lmp)),
-                    _to_date(row.get(col_edd)),
-                    _to_str(row.get(col_motivator)),
-                    _to_date(row.get(col_visit1)),
-                    _to_date(row.get(col_visit2)),
-                    _to_date(row.get(col_visit3)),
-                    _to_date(row.get(col_final)),
-                    _to_date(row.get(col_entry)) or today_str,
-                    datetime.now().isoformat(),
-                    _to_str(row.get(col_remarks)) if col_remarks else None,
-                ),
-            )
-            imported += 1
+            patient_id_from_excel = bool(_to_str(row.get(col_patient_id)) if col_patient_id else False)
+            inserted = False
+            for _ in range(5 if not patient_id_from_excel else 1):
+                try:
+                    cur.execute(
+                        """
+                        INSERT INTO patients (
+                            serial_number, patient_name, patient_id, mobile_number, village_name,
+                            lmp_date, edd_date, motivator_name, visit1, visit2, visit3, final_visit,
+                            entry_date, record_locked, created_at, remarks
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+                        """,
+                        (
+                            serial_int,
+                            patient_name,
+                            patient_id,
+                            mobile,
+                            _to_str(row.get(col_village)),
+                            _to_date(row.get(col_lmp)),
+                            _to_date(row.get(col_edd)),
+                            _to_str(row.get(col_motivator)),
+                            _to_date(row.get(col_visit1)),
+                            _to_date(row.get(col_visit2)),
+                            _to_date(row.get(col_visit3)),
+                            _to_date(row.get(col_final)),
+                            _to_date(row.get(col_entry)) or today_str,
+                            datetime.now().isoformat(),
+                            _to_str(row.get(col_remarks)) if col_remarks else None,
+                        ),
+                    )
+                    imported += 1
+                    inserted = True
+                    break
+                except sqlite3.IntegrityError:
+                    if patient_id_from_excel:
+                        skipped += 1
+                        break
+                    entry_d = parse_date(row.get(col_entry)) if col_entry else None
+                    entry_date = entry_d or date.today()
+                    patient_id = _generate_patient_id(cur, entry_date)
+            if not inserted and not patient_id_from_excel:
+                skipped += 1
 
         conn.commit()
     finally:

@@ -1,29 +1,26 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QCheckBox,
     QDialog,
     QDialogButtonBox,
     QFormLayout,
-    QHBoxLayout,
-    QLineEdit,
     QLabel,
+    QLineEdit,
     QMessageBox,
-    QRadioButton,
     QVBoxLayout,
 )
 
 from database.init_db import get_connection
 from services.password_service import hash_password, verify_password
+from utils.icon_utils import get_app_icon
 
 
 class LoginWindow(QDialog):
     """
-    Simple login dialog that validates against the `users` table.
-    This is a starter implementation and can be expanded with
-    password hashing and role-based behavior.
+    Login dialog that validates against the `users` table.
+    Role is derived from the database after successful authentication.
     """
 
     def __init__(self, parent=None):
@@ -35,47 +32,51 @@ class LoginWindow(QDialog):
         self.role: str | None = None
 
     def _build_ui(self) -> None:
+        size = 420
+        self.setFixedSize(size, size)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 24, 24, 24)
         layout.setSpacing(12)
-        self.setMinimumWidth(360)
-        self.setMinimumHeight(280)
 
-        # Login type: Admin or Staff
-        login_type_label = QLabel("Login as:")
-        login_type_label.setStyleSheet("font-weight: bold;")
-        layout.addWidget(login_type_label)
-        self.login_as_admin = QRadioButton("Login as Admin")
-        self.login_as_staff = QRadioButton("Login as Staff")
-        self.login_as_admin.setChecked(True)
-        type_row = QHBoxLayout()
-        type_row.addWidget(self.login_as_admin)
-        type_row.addWidget(self.login_as_staff)
-        type_row.addStretch()
-        layout.addLayout(type_row)
-        layout.addSpacing(12)
+        icon_label = QLabel()
+        icon_label.setPixmap(get_app_icon().pixmap(64, 64))
+        icon_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(icon_label)
 
-        form_layout = QFormLayout()
+        title = QLabel("Maternal Tracker")
+        title.setAlignment(Qt.AlignCenter)
+        title.setStyleSheet("font-size: 18px; font-weight: bold;")
+        layout.addWidget(title)
+        layout.addSpacing(8)
+
+        form = QFormLayout()
         self.username_edit = QLineEdit()
+        self.username_edit.setPlaceholderText("Username")
+        form.addRow("Username:", self.username_edit)
+
         self.password_edit = QLineEdit()
+        self.password_edit.setPlaceholderText("Password")
         self.password_edit.setEchoMode(QLineEdit.Password)
+        form.addRow("Password:", self.password_edit)
 
-        form_layout.addRow(QLabel("Username:"), self.username_edit)
-        form_layout.addRow(QLabel("Password:"), self.password_edit)
+        self.show_password_cb = QCheckBox("Show password")
+        self.show_password_cb.toggled.connect(self._on_show_password_toggled)
+        form.addRow("", self.show_password_cb)
 
-        layout.addLayout(form_layout)
+        layout.addLayout(form)
+        layout.addStretch()
 
         self.button_box = QDialogButtonBox(
             QDialogButtonBox.Ok | QDialogButtonBox.Cancel, Qt.Horizontal, self
         )
         self.button_box.accepted.connect(self.handle_login)
         self.button_box.rejected.connect(self.reject)
+        layout.addWidget(self.button_box)
 
-        btn_layout = QHBoxLayout()
-        btn_layout.addStretch()
-        btn_layout.addWidget(self.button_box)
+        self.username_edit.setFocus()
 
-        layout.addLayout(btn_layout)
+    def _on_show_password_toggled(self, checked: bool) -> None:
+        self.password_edit.setEchoMode(QLineEdit.Normal if checked else QLineEdit.Password)
 
     def handle_login(self) -> None:
         username = self.username_edit.text().strip()
@@ -83,6 +84,8 @@ class LoginWindow(QDialog):
 
         if not username or not password:
             QMessageBox.warning(self, "Login Failed", "Please enter username and password.")
+            self.password_edit.clear()
+            self.password_edit.setFocus()
             return
 
         conn = get_connection()
@@ -98,6 +101,8 @@ class LoginWindow(QDialog):
 
         if not row:
             QMessageBox.warning(self, "Login Failed", "Invalid username or password.")
+            self.password_edit.clear()
+            self.password_edit.setFocus()
             return
 
         db_username, password_hash, role = row
@@ -105,6 +110,8 @@ class LoginWindow(QDialog):
 
         if not verify_password(password, password_hash or ""):
             QMessageBox.warning(self, "Login Failed", "Invalid username or password.")
+            self.password_edit.clear()
+            self.password_edit.setFocus()
             return
 
         # Migrate plain-text password to hash on successful login
@@ -121,24 +128,6 @@ class LoginWindow(QDialog):
             finally:
                 conn.close()
 
-        # Validate login type matches user role
-        login_as_admin = self.login_as_admin.isChecked()
-        if login_as_admin and role != "ADMIN":
-            QMessageBox.warning(
-                self,
-                "Login Failed",
-                "This account is not an Admin. Please select 'Login as Staff'.",
-            )
-            return
-        if not login_as_admin and role != "STAFF":
-            QMessageBox.warning(
-                self,
-                "Login Failed",
-                "This account is not a Staff. Please select 'Login as Admin'.",
-            )
-            return
-
         self.username = db_username
         self.role = role
         self.accept()
-

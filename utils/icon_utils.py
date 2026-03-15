@@ -9,8 +9,8 @@ from pathlib import Path
 from PySide6.QtCore import QPointF, Qt, QRectF
 from PySide6.QtGui import QColor, QIcon, QPainter, QPainterPath, QPixmap
 
+from config import BASE_DIR
 
-BASE_DIR = Path(__file__).resolve().parent.parent
 ICON_PATH = BASE_DIR / "assets" / "icon.png"
 
 

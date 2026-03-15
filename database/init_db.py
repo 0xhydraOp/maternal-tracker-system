@@ -4,10 +4,12 @@ import sqlite3
 from pathlib import Path
 from typing import Optional
 
+from config import BASE_DIR
 from services.password_service import hash_password
 
+# Re-export for backward compatibility (e.g. backup_service)
+__all__ = ["get_connection", "init_db", "DB_PATH", "BASE_DIR"]
 
-BASE_DIR = Path(__file__).resolve().parent.parent
 DB_PATH = BASE_DIR / "database" / "maternal_tracking.db"
 
 

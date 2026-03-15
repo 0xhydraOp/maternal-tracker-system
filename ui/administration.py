@@ -4,9 +4,9 @@ change logs, and custom motivators.
 """
 from __future__ import annotations
 
-from typing import List, Tuple, Any, Optional
-
+import sqlite3
 from datetime import date
+from typing import List, Tuple, Any, Optional
 
 from PySide6.QtCore import QDate, Qt
 from PySide6.QtWidgets import (
@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
     QInputDialog,
     QFileDialog,
     QFrame,
+    QGroupBox,
 )
 
 from config import (
@@ -63,37 +64,37 @@ class AdministrationWidget(QWidget):
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(24, 24, 24, 24)
-        layout.setSpacing(16)
-        admin_title = QLabel("Administration Area - Full system control (ADMIN only)")
-        admin_title.setObjectName("sectionTitle")
-        admin_title.setWordWrap(True)
-        layout.addWidget(admin_title)
-        layout.addSpacing(12)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(12)
 
-        # Database stats summary panel
-        stats_frame = QFrame()
-        stats_frame.setObjectName("topBarActions")
-        stats_layout = QHBoxLayout(stats_frame)
-        stats_layout.setSpacing(24)
+        # Compact header with stats
+        header = QFrame()
+        header.setObjectName("topBarActions")
+        header_layout = QHBoxLayout(header)
+        header_layout.setContentsMargins(16, 12, 16, 12)
+        header_layout.setSpacing(20)
+        title = QLabel("Administration")
+        title.setObjectName("sectionTitle")
+        header_layout.addWidget(title)
+        header_layout.addSpacing(20)
         self.stats_patients_label = QLabel("Patients: 0")
         self.stats_users_label = QLabel("Users: 0")
-        self.stats_logs_label = QLabel("Change Logs: 0")
+        self.stats_logs_label = QLabel("Logs: 0")
         for lbl in (self.stats_patients_label, self.stats_users_label, self.stats_logs_label):
             lbl.setObjectName("sectionTitle")
-        stats_layout.addWidget(self.stats_patients_label)
-        stats_layout.addWidget(self.stats_users_label)
-        stats_layout.addWidget(self.stats_logs_label)
-        stats_layout.addStretch()
-        layout.addWidget(stats_frame)
-        layout.addSpacing(8)
+        header_layout.addWidget(self.stats_patients_label)
+        header_layout.addWidget(self.stats_users_label)
+        header_layout.addWidget(self.stats_logs_label)
+        header_layout.addStretch()
+        layout.addWidget(header)
 
         tabs = QTabWidget()
-        tabs.addTab(self._build_users_tab(), "User Management")
-        tabs.addTab(self._build_patients_tab(), "Patient Management")
-        tabs.addTab(self._build_change_logs_tab(), "Change Logs")
-        tabs.addTab(self._build_motivators_tab(), "Custom Motivators")
-        tabs.addTab(self._build_settings_tab(), "Settings")
+        tabs.setDocumentMode(True)
+        tabs.addTab(self._build_users_tab(), "  Users  ")
+        tabs.addTab(self._build_patients_tab(), "  Patients  ")
+        tabs.addTab(self._build_change_logs_tab(), "  Change Logs  ")
+        tabs.addTab(self._build_motivators_tab(), "  Motivators  ")
+        tabs.addTab(self._build_settings_tab(), "  Settings  ")
         layout.addWidget(tabs)
 
     def _refresh_stats(self) -> None:
@@ -112,18 +113,26 @@ class AdministrationWidget(QWidget):
             conn.close()
         self.stats_patients_label.setText(f"Patients: {patients}")
         self.stats_users_label.setText(f"Users: {users}")
-        self.stats_logs_label.setText(f"Change Logs: {logs}")
+        self.stats_logs_label.setText(f"Logs: {logs}")
 
     def _build_users_tab(self) -> QWidget:
         w = QWidget()
         layout = QVBoxLayout(w)
-        layout.setSpacing(12)
+        layout.setSpacing(10)
+        layout.setContentsMargins(12, 12, 12, 12)
         btn_row = QHBoxLayout()
         add_btn = QPushButton("Add User")
         add_btn.clicked.connect(self._add_user)
+        edit_btn = QPushButton("Edit")
+        edit_btn.clicked.connect(self._edit_user)
+        delete_btn = QPushButton("Delete")
+        delete_btn.clicked.connect(self._delete_user)
         refresh_btn = QPushButton("Refresh")
         refresh_btn.clicked.connect(self._load_users)
         btn_row.addWidget(add_btn)
+        btn_row.addWidget(edit_btn)
+        btn_row.addWidget(delete_btn)
+        btn_row.addSpacing(12)
         btn_row.addWidget(refresh_btn)
         btn_row.addStretch()
         layout.addLayout(btn_row)
@@ -132,50 +141,46 @@ class AdministrationWidget(QWidget):
         self.users_table.setColumnCount(4)
         self.users_table.setHorizontalHeaderLabels(["ID", "Username", "Role", "Created"])
         self.users_table.horizontalHeader().setVisible(True)
-        self.users_table.horizontalHeader().setMinimumHeight(40)
+        self.users_table.horizontalHeader().setMinimumHeight(36)
         self.users_table.horizontalHeader().setStretchLastSection(True)
         self.users_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.users_table.setSelectionMode(QTableWidget.SingleSelection)
         self.users_table.setAlternatingRowColors(True)
         self.users_table.cellDoubleClicked.connect(lambda r, c: self._edit_user())
         layout.addWidget(self.users_table)
-        edit_row = QHBoxLayout()
-        edit_btn = QPushButton("Edit User")
-        edit_btn.clicked.connect(self._edit_user)
-        delete_btn = QPushButton("Delete User")
-        delete_btn.clicked.connect(self._delete_user)
-        edit_row.addWidget(edit_btn)
-        edit_row.addWidget(delete_btn)
-        edit_row.addStretch()
-        layout.addLayout(edit_row)
         self._load_users()
         return w
 
     def _build_patients_tab(self) -> QWidget:
         w = QWidget()
         layout = QVBoxLayout(w)
-        layout.setSpacing(12)
-        # Patient filters
-        filter_row = QHBoxLayout()
-        filter_row.addWidget(QLabel("Patient ID:"))
+        layout.setSpacing(10)
+        layout.setContentsMargins(12, 12, 12, 12)
+        # Filters in one compact row
+        filter_frame = QFrame()
+        filter_frame.setObjectName("topBarActions")
+        filter_layout = QHBoxLayout(filter_frame)
+        filter_layout.setContentsMargins(12, 8, 12, 8)
+        filter_layout.setSpacing(12)
+        filter_layout.addWidget(QLabel("ID:"))
         self.patient_id_filter = QLineEdit()
-        self.patient_id_filter.setPlaceholderText("Filter...")
-        self.patient_id_filter.setMaximumWidth(120)
+        self.patient_id_filter.setPlaceholderText("Filter")
+        self.patient_id_filter.setMaximumWidth(100)
         self.patient_id_filter.textChanged.connect(self._load_patients)
-        filter_row.addWidget(self.patient_id_filter)
-        filter_row.addWidget(QLabel("Name:"))
+        filter_layout.addWidget(self.patient_id_filter)
+        filter_layout.addWidget(QLabel("Name:"))
         self.patient_name_filter = QLineEdit()
-        self.patient_name_filter.setPlaceholderText("Filter...")
-        self.patient_name_filter.setMaximumWidth(120)
+        self.patient_name_filter.setPlaceholderText("Filter")
+        self.patient_name_filter.setMaximumWidth(100)
         self.patient_name_filter.textChanged.connect(self._load_patients)
-        filter_row.addWidget(self.patient_name_filter)
-        filter_row.addWidget(QLabel("Village:"))
+        filter_layout.addWidget(self.patient_name_filter)
+        filter_layout.addWidget(QLabel("Village:"))
         self.patient_village_filter = QLineEdit()
-        self.patient_village_filter.setPlaceholderText("Filter...")
-        self.patient_village_filter.setMaximumWidth(120)
+        self.patient_village_filter.setPlaceholderText("Filter")
+        self.patient_village_filter.setMaximumWidth(100)
         self.patient_village_filter.textChanged.connect(self._load_patients)
-        filter_row.addWidget(self.patient_village_filter)
-        filter_row.addWidget(QLabel("Motivator:"))
+        filter_layout.addWidget(self.patient_village_filter)
+        filter_layout.addWidget(QLabel("Motivator:"))
         self.patient_motivator_filter = QComboBox()
         self.patient_motivator_filter.setEditable(True)
         self.patient_motivator_filter.blockSignals(True)
@@ -183,19 +188,20 @@ class AdministrationWidget(QWidget):
         self.patient_motivator_filter.addItems(get_all_motivator_names())
         self.patient_motivator_filter.setCurrentIndex(0)
         self.patient_motivator_filter.blockSignals(False)
-        self.patient_motivator_filter.setMaximumWidth(140)
+        self.patient_motivator_filter.setMaximumWidth(120)
         self.patient_motivator_filter.currentTextChanged.connect(self._load_patients)
-        filter_row.addWidget(self.patient_motivator_filter)
-        filter_row.addStretch()
-        layout.addLayout(filter_row)
+        filter_layout.addWidget(self.patient_motivator_filter)
+        filter_layout.addStretch()
+        layout.addWidget(filter_frame)
+        # Action buttons
         btn_row = QHBoxLayout()
         refresh_btn = QPushButton("Refresh")
         refresh_btn.clicked.connect(self._load_patients)
-        edit_btn = QPushButton("Edit Selected Patient")
+        edit_btn = QPushButton("Edit")
         edit_btn.clicked.connect(self._edit_patient)
-        delete_btn = QPushButton("Delete Selected Patient")
+        delete_btn = QPushButton("Delete")
         delete_btn.clicked.connect(self._delete_patient)
-        unlock_btn = QPushButton("Unlock Selected Record")
+        unlock_btn = QPushButton("Unlock")
         unlock_btn.clicked.connect(self._unlock_patient)
         btn_row.addWidget(refresh_btn)
         btn_row.addWidget(edit_btn)
@@ -223,38 +229,40 @@ class AdministrationWidget(QWidget):
     def _build_change_logs_tab(self) -> QWidget:
         w = QWidget()
         layout = QVBoxLayout(w)
-        layout.setSpacing(12)
-        # Filters: From Date, To Date, Patient ID, Changed By
-        filter_row = QHBoxLayout()
-        filter_row.addWidget(QLabel("From:"))
+        layout.setSpacing(10)
+        layout.setContentsMargins(12, 12, 12, 12)
+        filter_frame = QFrame()
+        filter_frame.setObjectName("topBarActions")
+        filter_layout = QHBoxLayout(filter_frame)
+        filter_layout.setContentsMargins(12, 8, 12, 8)
+        filter_layout.setSpacing(12)
+        filter_layout.addWidget(QLabel("From:"))
         self.log_from_date = QDateEdit()
         self.log_from_date.setCalendarPopup(True)
         self.log_from_date.setDisplayFormat(DATE_FORMAT_DISPLAY)
         self.log_from_date.setDate(QDate(date.today().year, 1, 1))
-        filter_row.addWidget(self.log_from_date)
-        filter_row.addWidget(QLabel("To:"))
+        filter_layout.addWidget(self.log_from_date)
+        filter_layout.addWidget(QLabel("To:"))
         self.log_to_date = QDateEdit()
         self.log_to_date.setCalendarPopup(True)
         self.log_to_date.setDisplayFormat(DATE_FORMAT_DISPLAY)
         self.log_to_date.setDate(QDate.currentDate())
-        filter_row.addWidget(self.log_to_date)
-        filter_row.addWidget(QLabel("Patient ID:"))
+        filter_layout.addWidget(self.log_to_date)
+        filter_layout.addWidget(QLabel("Patient:"))
         self.log_patient_filter = QLineEdit()
-        self.log_patient_filter.setPlaceholderText("Filter by patient...")
-        self.log_patient_filter.setMaximumWidth(120)
-        filter_row.addWidget(self.log_patient_filter)
-        filter_row.addWidget(QLabel("Changed By:"))
+        self.log_patient_filter.setPlaceholderText("Filter")
+        self.log_patient_filter.setMaximumWidth(100)
+        filter_layout.addWidget(self.log_patient_filter)
+        filter_layout.addWidget(QLabel("User:"))
         self.log_user_filter = QLineEdit()
-        self.log_user_filter.setPlaceholderText("Filter by user...")
-        self.log_user_filter.setMaximumWidth(120)
-        filter_row.addWidget(self.log_user_filter)
-        layout.addLayout(filter_row)
-        btn_row = QHBoxLayout()
+        self.log_user_filter.setPlaceholderText("Filter")
+        self.log_user_filter.setMaximumWidth(100)
+        filter_layout.addWidget(self.log_user_filter)
         refresh_btn = QPushButton("Refresh")
         refresh_btn.clicked.connect(self._load_change_logs)
-        btn_row.addWidget(refresh_btn)
-        btn_row.addStretch()
-        layout.addLayout(btn_row)
+        filter_layout.addWidget(refresh_btn)
+        filter_layout.addStretch()
+        layout.addWidget(filter_frame)
         self.logs_table = QTableWidget()
         self.logs_table.setObjectName("dataTable")
         self.logs_table.setColumnCount(6)
@@ -272,17 +280,19 @@ class AdministrationWidget(QWidget):
     def _build_motivators_tab(self) -> QWidget:
         w = QWidget()
         layout = QVBoxLayout(w)
-        layout.setSpacing(12)
+        layout.setSpacing(10)
+        layout.setContentsMargins(12, 12, 12, 12)
         btn_row = QHBoxLayout()
-        add_btn = QPushButton("Add New Motivator")
+        add_btn = QPushButton("Add")
         add_btn.clicked.connect(self._add_motivator)
+        delete_btn = QPushButton("Remove")
+        delete_btn.clicked.connect(self._delete_motivator)
         refresh_btn = QPushButton("Refresh")
         refresh_btn.clicked.connect(self._load_motivators)
-        delete_btn = QPushButton("Remove Selected")
-        delete_btn.clicked.connect(self._delete_motivator)
         btn_row.addWidget(add_btn)
-        btn_row.addWidget(refresh_btn)
         btn_row.addWidget(delete_btn)
+        btn_row.addSpacing(12)
+        btn_row.addWidget(refresh_btn)
         btn_row.addStretch()
         layout.addLayout(btn_row)
         self.motivators_table = QTableWidget()
@@ -301,39 +311,41 @@ class AdministrationWidget(QWidget):
     def _build_settings_tab(self) -> QWidget:
         w = QWidget()
         layout = QVBoxLayout(w)
-        layout.setSpacing(12)
+        layout.setSpacing(16)
+        layout.setContentsMargins(12, 12, 12, 12)
 
-        # Admin Area Password
-        pwd_group = QWidget()
+        # Password
+        pwd_group = QGroupBox("Admin Area Password")
         pwd_form = QFormLayout(pwd_group)
         self.admin_pwd_edit = QLineEdit()
         self.admin_pwd_edit.setEchoMode(QLineEdit.Password)
-        self.admin_pwd_edit.setPlaceholderText("Current: admin@123 (change to set new)")
-        pwd_btn = QPushButton("Set Admin Area Password")
+        self.admin_pwd_edit.setPlaceholderText("Enter new password")
+        pwd_btn = QPushButton("Set Password")
         pwd_btn.clicked.connect(self._set_admin_password)
-        pwd_form.addRow("Admin Area Password:", self.admin_pwd_edit)
+        pwd_form.addRow("Password:", self.admin_pwd_edit)
         pwd_form.addRow("", pwd_btn)
-        layout.addWidget(QLabel("Change the password required to access Administration Area:"))
         layout.addWidget(pwd_group)
 
-        # Backup folder path
-        backup_layout = QFormLayout()
+        # Backup folder
+        backup_group = QGroupBox("Backup Folder")
+        backup_layout = QFormLayout(backup_group)
         self.backup_label = QLabel(get_backup_dir())
         self.backup_label.setObjectName("backupFolderPath")
         self.backup_label.setWordWrap(True)
-        change_backup_btn = QPushButton("Change Backup Folder...")
+        change_backup_btn = QPushButton("Change...")
         change_backup_btn.clicked.connect(self._change_backup_folder)
-        backup_layout.addRow("Backup folder:", self.backup_label)
+        backup_layout.addRow("Location:", self.backup_label)
         backup_layout.addRow("", change_backup_btn)
-        layout.addWidget(QLabel("Database backup location:"))
-        layout.addLayout(backup_layout)
+        layout.addWidget(backup_group)
 
-        # Dark Mode
+        # Appearance
+        theme_group = QGroupBox("Appearance")
+        theme_layout = QVBoxLayout(theme_group)
         self.dark_mode_check = QCheckBox("Enable Dark Mode")
         self.dark_mode_check.setChecked(get_dark_mode())
         self.dark_mode_check.stateChanged.connect(self._on_dark_mode_changed)
-        layout.addWidget(self.dark_mode_check)
-        layout.addWidget(QLabel("(Theme applies immediately when toggled)"))
+        theme_layout.addWidget(self.dark_mode_check)
+        layout.addWidget(theme_group)
 
         layout.addStretch()
         return w
@@ -407,6 +419,13 @@ class AdministrationWidget(QWidget):
                 log_admin_activity("USER_ADD", f"Added user: {username} (role: {role})", self.username)
                 QMessageBox.information(self, "Success", f"User '{username}' added.")
                 self._load_users()
+            except sqlite3.IntegrityError:
+                conn.rollback()
+                QMessageBox.warning(
+                    self,
+                    "Validation",
+                    f"Username '{username}' already exists. Please choose a different username.",
+                )
             except Exception as e:
                 conn.rollback()
                 QMessageBox.critical(self, "Error", str(e))
@@ -452,6 +471,13 @@ class AdministrationWidget(QWidget):
                 log_admin_activity("USER_EDIT", f"Updated user: {new_uname}", self.username)
                 QMessageBox.information(self, "Success", "User updated.")
                 self._load_users()
+            except sqlite3.IntegrityError:
+                conn.rollback()
+                QMessageBox.warning(
+                    self,
+                    "Validation",
+                    f"Username '{new_uname}' already exists. Please choose a different username.",
+                )
             except Exception as e:
                 conn.rollback()
                 QMessageBox.critical(self, "Error", str(e))
@@ -471,13 +497,30 @@ class AdministrationWidget(QWidget):
             QMessageBox.warning(self, "Delete", "Select a user to delete.")
             return
         uname_item = self.users_table.item(row, 1)
+        role_item = self.users_table.item(row, 2)
         if not uname_item:
             QMessageBox.warning(self, "Delete", "Invalid row data.")
             return
         uname = uname_item.text()
+        role = role_item.text() if role_item else ""
         if uname == self.username:
             QMessageBox.warning(self, "Delete", "You cannot delete your own account.")
             return
+        if role == "ADMIN":
+            conn = get_connection()
+            try:
+                cur = conn.cursor()
+                cur.execute("SELECT COUNT(*) FROM users WHERE role = 'ADMIN'")
+                admin_count = cur.fetchone()[0] or 0
+                if admin_count <= 1:
+                    QMessageBox.warning(
+                        self,
+                        "Delete",
+                        "Cannot delete the last administrator. At least one ADMIN must remain.",
+                    )
+                    return
+            finally:
+                conn.close()
         if not self._confirm_delete("Delete User", f"Permanently delete user '{uname}'? This cannot be undone."):
             return
         conn = get_connection()
@@ -706,7 +749,11 @@ class AdministrationWidget(QWidget):
         if row < 0:
             QMessageBox.warning(self, "Remove", "Select a motivator to remove.")
             return
-        name = self.motivators_table.item(row, 0).text()
+        name_item = self.motivators_table.item(row, 0)
+        if not name_item:
+            QMessageBox.warning(self, "Remove", "Invalid row data.")
+            return
+        name = name_item.text()
         reply = QMessageBox.question(
             self, "Remove Motivator",
             f"Remove '{name}' from custom motivators list?\n\nPatients with this motivator will keep it.",

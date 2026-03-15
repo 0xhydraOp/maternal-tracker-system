@@ -5,9 +5,30 @@ Admin area password and theme can be changed here or via settings.
 from __future__ import annotations
 
 import json
+import os
+import sys
 from pathlib import Path
 
-BASE_DIR = Path(__file__).resolve().parent
+
+def _get_base_dir() -> Path:
+    """Project root - use exe directory when running as frozen .exe."""
+    if getattr(sys, "frozen", False):
+        exe_dir = Path(sys.executable).parent
+        # If exe is in Program Files, we can't write config/db there - use LocalAppData
+        test_file = exe_dir / ".write_test"
+        try:
+            test_file.touch()
+            test_file.unlink()
+            return exe_dir
+        except OSError:
+            local_app_data = os.environ.get("LOCALAPPDATA", os.path.expanduser("~"))
+            data_dir = Path(local_app_data) / "Maternal Tracker System"
+            data_dir.mkdir(parents=True, exist_ok=True)
+            return data_dir
+    return Path(__file__).resolve().parent
+
+
+BASE_DIR = _get_base_dir()
 CONFIG_PATH = BASE_DIR / "config.json"
 DEFAULT_BACKUP_DIR = str(BASE_DIR / "backups")
 

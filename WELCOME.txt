@@ -1,0 +1,12 @@
+Welcome to Maternal Tracker System Setup
+
+This wizard will guide you through the installation of Maternal Tracker System - an offline desktop application for tracking maternal patients and their scheduled check-up visits.
+
+Features:
+  - Patient registration and visit tracking
+  - Motivator and village management
+  - Reports and Excel export
+  - Automatic backups
+  - Dark and light themes
+
+Click Next to continue.

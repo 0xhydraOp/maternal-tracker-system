@@ -57,15 +57,21 @@ def get_stylesheet(dark_mode: bool = False) -> str:
         }
 
         QFrame#appHeaderBar QWidget,
-        QFrame#appHeaderBar QLabel {
+        QFrame#appHeaderBar QLabel,
+        QFrame#appHeaderBar QFrame {
             background-color: transparent;
             border: none;
+        }
+
+        QFrame#appTitleContainer {
+            background-color: #2c3e50;
         }
 
         QLabel#appTitle {
             font-size: 18px;
             font-weight: bold;
             color: #ffffff;
+            background-color: #2c3e50;
             letter-spacing: 1px;
             padding: 4px 0;
         }
@@ -352,7 +358,7 @@ def get_stylesheet(dark_mode: bool = False) -> str:
         QLabel#headerDateTime {
             font-size: 12px;
             color: #ffffff;
-            background-color: transparent;
+            background-color: #2c3e50;
             border: none;
             min-width: 220px;
         }
@@ -402,6 +408,24 @@ def get_stylesheet(dark_mode: bool = False) -> str:
             padding: 10px 10px;
             min-height: 44px;
             min-width: 80px;
+        }
+
+        QFrame#reportsFilterBar {
+            background-color: #2d2d3d;
+            border: 1px solid #3d3d4d;
+            border-radius: 8px;
+            padding: 12px;
+        }
+        QGroupBox#reportsGroup {
+            font-weight: bold;
+            border: 1px solid #3d3d4d;
+            border-radius: 8px;
+        }
+        QFrame#chartSection {
+            background-color: #2d2d3d;
+            border: 1px solid #3d3d4d;
+            border-radius: 8px;
+            padding: 16px;
         }
         """
     # Light theme
@@ -457,15 +481,21 @@ def get_stylesheet(dark_mode: bool = False) -> str:
         }
 
         QFrame#appHeaderBar QWidget,
-        QFrame#appHeaderBar QLabel {
+        QFrame#appHeaderBar QLabel,
+        QFrame#appHeaderBar QFrame {
             background-color: transparent;
             border: none;
+        }
+
+        QFrame#appTitleContainer {
+            background-color: #2c3e50;
         }
 
         QLabel#appTitle {
             font-size: 18px;
             font-weight: bold;
             color: #ffffff;
+            background-color: #2c3e50;
             letter-spacing: 1px;
             padding: 4px 0;
         }
@@ -473,7 +503,7 @@ def get_stylesheet(dark_mode: bool = False) -> str:
         QLabel#headerDateTime {
             font-size: 12px;
             color: #ffffff;
-            background-color: transparent;
+            background-color: #2c3e50;
             border: none;
             min-width: 220px;
         }
@@ -761,7 +791,7 @@ def get_stylesheet(dark_mode: bool = False) -> str:
         QLabel#headerDateTime {
             font-size: 12px;
             color: #ffffff;
-            background-color: transparent;
+            background-color: #2c3e50;
             border: none;
         }
 
@@ -826,5 +856,23 @@ def get_stylesheet(dark_mode: bool = False) -> str:
         }
         QTableWidget#patientSearchTable::item {
             color: #2c3e50;
+        }
+
+        QFrame#reportsFilterBar {
+            background-color: #ffffff;
+            border: 1px solid #dee2e6;
+            border-radius: 8px;
+            padding: 12px;
+        }
+        QGroupBox#reportsGroup {
+            font-weight: bold;
+            border: 1px solid #dee2e6;
+            border-radius: 8px;
+        }
+        QFrame#chartSection {
+            background-color: #ffffff;
+            border: 1px solid #dee2e6;
+            border-radius: 8px;
+            padding: 16px;
         }
         """

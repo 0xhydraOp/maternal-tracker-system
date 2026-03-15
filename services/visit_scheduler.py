@@ -42,6 +42,25 @@ def schedule_subsequent_visits(
     return v1, v2, v3, v4
 
 
+def get_next_visit_due(
+    visit1: Optional[date],
+    visit2: Optional[date],
+    visit3: Optional[date],
+    final_visit: Optional[date],
+    today: Optional[date] = None,
+) -> Optional[date]:
+    """Return the next visit due date, or None if all visits done or no visits yet."""
+    if today is None:
+        today = date.today()
+    completed = [d for d in (visit1, visit2, visit3, final_visit) if d and d <= today]
+    if not completed:
+        return None
+    if final_visit and final_visit <= today:
+        return None  # All visits done
+    last = max(completed)
+    return last + timedelta(days=VISIT_INTERVAL_DAYS)
+
+
 def classify_visit_status(visit_date: Optional[date], today: Optional[date] = None) -> str:
     """
     Classify a visit as 'upcoming', 'overdue', 'completed', or 'none'.

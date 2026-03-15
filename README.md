@@ -10,7 +10,6 @@ This is a desktop application for tracking maternal patients, their scheduled vi
 
 - `main.py` – Application entry point
 - `database/` – SQLite database and initialization scripts
-- `models/` – Data models
 - `services/` – Business logic (visit scheduling, backups, etc.)
 - `ui/` – PySide6 UI components
 - `backups/` – Automatic and manual backup files
