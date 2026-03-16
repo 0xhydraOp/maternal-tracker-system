@@ -65,3 +65,7 @@ htmlcov/
 # Environments
 .env
 .envrc
+
+# Release installer (allow users to download)
+!release/
+!release/*.zip
