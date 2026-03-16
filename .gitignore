@@ -53,3 +53,15 @@ dist/
 
 # Config (user-specific)
 config.json
+
+# PyInstaller
+*.manifest
+
+# Unit test / coverage
+.coverage
+.pytest_cache/
+htmlcov/
+
+# Environments
+.env
+.envrc
