@@ -32,7 +32,7 @@ class LoginWindow(QDialog):
         self.role: str | None = None
 
     def _build_ui(self) -> None:
-        size = 420
+        size = 520
         self.setFixedSize(size, size)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 24, 24, 24)

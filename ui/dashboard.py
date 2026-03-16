@@ -7,8 +7,8 @@ import os
 import shutil
 import sys
 
-from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QShortcut, QKeySequence, QPixmap
+from PySide6.QtCore import Qt, QTimer, Signal, QObject, QEvent
+from PySide6.QtGui import QColor, QShortcut, QKeySequence
 from PySide6.QtWidgets import (
     QGraphicsDropShadowEffect,
     QApplication,
@@ -25,16 +25,15 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QStackedWidget,
+    QStatusBar,
     QStyle,
     QTableWidget,
     QTableWidgetItem,
-    QHeaderView,
-    QAbstractItemView,
     QVBoxLayout,
     QWidget,
 )
 
-from config import get_admin_area_password
+from config import APP_VERSION, get_admin_area_password
 from database.init_db import get_connection
 from utils.date_utils import parse_date as parse_date_flex, format_for_display
 from services.backup_service import (
@@ -47,7 +46,6 @@ from services.excel_import_service import import_from_excel
 from services.visit_scheduler import (
     UPCOMING_DAYS,
     EDD_UPCOMING_DAYS,
-    VISIT_INTERVAL_DAYS,
     get_next_visit_due,
 )
 from ui.administration import AdministrationWidget
@@ -56,6 +54,24 @@ from ui.login_window import LoginWindow
 from ui.patient_entry import PatientEntryDialog
 from ui.patient_search import PatientSearchDialog
 from ui.reports import ReportsWidget
+
+
+class CardClickFilter(QObject):
+    """Event filter to open Patient Search when card (or its children) is clicked."""
+
+    def __init__(self, filter_mode: str, callback, parent=None):
+        super().__init__(parent)
+        self.filter_mode = filter_mode
+        self.callback = callback
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.MouseButtonPress:
+            btn = getattr(event, "button", lambda: Qt.LeftButton)()
+            if btn == Qt.LeftButton:
+                # Defer dialog open to avoid issues during event processing
+                QTimer.singleShot(0, lambda: self.callback(self.filter_mode))
+                return True
+        return super().eventFilter(obj, event)
 
 
 class DashboardWindow(QMainWindow):
@@ -71,12 +87,14 @@ class DashboardWindow(QMainWindow):
         self.role = role
 
         self.setWindowTitle("Maternal Tracking")
+        self.setMinimumSize(1024, 600)
         self._build_ui()
         self._update_header_datetime()
         self._datetime_timer = QTimer(self)
         self._datetime_timer.timeout.connect(self._update_header_datetime)
         self._datetime_timer.start(60000)  # Update every minute
-        self.refresh_stats()
+        self._last_nav_index = -1
+        QTimer.singleShot(0, self.refresh_stats)  # Defer so window appears first
         self._setup_shortcuts()
 
     def _setup_shortcuts(self) -> None:
@@ -116,36 +134,42 @@ class DashboardWindow(QMainWindow):
             style.standardIcon(QStyle.SP_ComputerIcon), "  Dashboard"
         )
         self.dashboard_btn.setObjectName("navButton")
+        self.dashboard_btn.setToolTip("View dashboard overview")
         self.dashboard_btn.clicked.connect(lambda: self._set_active_page(0))
 
         self.register_btn = QPushButton(
             style.standardIcon(QStyle.SP_FileDialogNewFolder), "  Register Patient"
         )
         self.register_btn.setObjectName("navButton")
+        self.register_btn.setToolTip("Register a new patient (Ctrl+N)")
         self.register_btn.clicked.connect(lambda: self._set_active_page(1))
 
         self.search_btn = QPushButton(
             style.standardIcon(QStyle.SP_FileDialogContentsView), "  Search Patients"
         )
         self.search_btn.setObjectName("navButton")
+        self.search_btn.setToolTip("Search and filter patient records (Ctrl+F)")
         self.search_btn.clicked.connect(lambda: self._set_active_page(2))
 
         self.reports_btn = QPushButton(
             style.standardIcon(QStyle.SP_FileDialogDetailedView), "  Reports"
         )
         self.reports_btn.setObjectName("navButton")
+        self.reports_btn.setToolTip("View reports and analytics")
         self.reports_btn.clicked.connect(lambda: self._set_active_page(3))
 
         self.backup_btn = QPushButton(
             style.standardIcon(QStyle.SP_DialogSaveButton), "  Backup Manager"
         )
         self.backup_btn.setObjectName("navButton")
+        self.backup_btn.setToolTip("Create, restore, and manage backups")
         self.backup_btn.clicked.connect(lambda: self._set_active_page(4))
 
         self.admin_btn = QPushButton(
             style.standardIcon(QStyle.SP_FileDialogInfoView), "  Administration Area"
         )
         self.admin_btn.setObjectName("navButton")
+        self.admin_btn.setToolTip("User and motivator management (Admin only)")
         self.admin_btn.clicked.connect(self._open_administration)
         self.admin_btn.setVisible(self.role.upper() == "ADMIN")
 
@@ -169,6 +193,7 @@ class DashboardWindow(QMainWindow):
             style.standardIcon(QStyle.SP_DialogApplyButton), "  Change Password"
         )
         self.change_password_btn.setObjectName("navButton")
+        self.change_password_btn.setToolTip("Change your password")
         self.change_password_btn.clicked.connect(self._change_password)
         sidebar_layout.addWidget(self.change_password_btn)
 
@@ -176,6 +201,7 @@ class DashboardWindow(QMainWindow):
             style.standardIcon(QStyle.SP_DialogCloseButton), "  Logout"
         )
         self.logout_btn.setObjectName("navButton")
+        self.logout_btn.setToolTip("Sign out of the application")
         self.logout_btn.clicked.connect(self._logout)
         sidebar_layout.addWidget(self.logout_btn)
 
@@ -201,6 +227,11 @@ class DashboardWindow(QMainWindow):
         dev_label.setObjectName("sidebarFooter")
         dev_label.setWordWrap(True)
         dev_layout.addWidget(dev_label)
+        about_btn = QPushButton("About")
+        about_btn.setObjectName("navButton")
+        about_btn.setToolTip("About Maternal Tracker System")
+        about_btn.clicked.connect(self._show_about_dialog)
+        dev_layout.addWidget(about_btn)
         sidebar_layout.addWidget(dev_footer)
 
         # Main content area with header bar
@@ -346,7 +377,10 @@ class DashboardWindow(QMainWindow):
 
             cards_layout.addWidget(frame, row, col, 1, col_span)
             if filter_mode:
-                frame.mousePressEvent = lambda e, fm=filter_mode: self._open_search_with_filter(fm)
+                click_filter = CardClickFilter(filter_mode, self._open_search_with_filter, parent=frame)
+                frame.installEventFilter(click_filter)
+                for w in (icon_label, title_label, value_label, trend_label):
+                    w.installEventFilter(click_filter)
             return frame, value_label, trend_label
 
         _, self.due_soon_label, _ = make_card(
@@ -402,7 +436,10 @@ class DashboardWindow(QMainWindow):
         reg_label.setAlignment(Qt.AlignLeft | Qt.AlignTop)
         reg_layout.addWidget(reg_label)
         reg_layout.addSpacing(12)
-        reg_button = QPushButton("Open Patient Entry Form")
+        reg_button = QPushButton(
+            style.standardIcon(QStyle.SP_FileDialogNewFolder), "  Open Patient Entry Form"
+        )
+        reg_button.setToolTip("Click or double-click to open the patient entry form")
         reg_button.clicked.connect(self.open_patient_entry)
         reg_layout.addWidget(reg_button)
         reg_layout.addStretch()
@@ -468,12 +505,18 @@ class DashboardWindow(QMainWindow):
         self.backup_table.setHorizontalHeaderLabels(["Date", "Size", "Filename", "Path"])
         self.backup_table.horizontalHeader().setVisible(True)
         self.backup_table.horizontalHeader().setMinimumHeight(40)
+        self.backup_table.horizontalHeader().setMinimumSectionSize(80)
         self.backup_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.backup_table.setSelectionMode(QTableWidget.SingleSelection)
         self.backup_table.setAlternatingRowColors(True)
+        self.backup_table.setShowGrid(True)
+        self.backup_table.verticalHeader().setVisible(False)
         self.backup_table.horizontalHeader().setStretchLastSection(True)
         self.backup_table.setColumnHidden(3, True)
         self.backup_table.setMinimumHeight(200)
+        self.backup_table.setMinimumWidth(500)
+        for col, w in enumerate([120, 90, 200, 100]):
+            self.backup_table.setColumnWidth(col, w)
         b_layout.addWidget(self.backup_table)
 
         # Row actions
@@ -516,8 +559,38 @@ class DashboardWindow(QMainWindow):
 
         self.setCentralWidget(central)
 
+        # Status bar for action feedback
+        self.statusBar().showMessage("Ready")
+        self.statusBar().setStyleSheet(
+            "QStatusBar { font-size: 12px; padding: 4px; }"
+        )
+
         # Default page
         self._set_active_page(0)
+
+    def _show_status(self, message: str, timeout: int = 3000) -> None:
+        """Show a brief status message in the status bar."""
+        self.statusBar().showMessage(message, timeout)
+
+    def _show_about_dialog(self) -> None:
+        """Show About dialog with app info."""
+        dlg = QDialog(self)
+        dlg.setWindowTitle("About Maternal Tracker System")
+        layout = QVBoxLayout(dlg)
+        layout.setSpacing(12)
+        layout.setContentsMargins(24, 24, 24, 24)
+        title = QLabel("Maternal Tracker System")
+        title.setStyleSheet("font-size: 18px; font-weight: bold;")
+        layout.addWidget(title)
+        layout.addWidget(QLabel(f"Version {APP_VERSION}"))
+        layout.addWidget(QLabel("Offline desktop application for tracking maternal patients and visits."))
+        layout.addWidget(QLabel("Copyright \u00A9 2024 Maternal Tracker. All rights reserved."))
+        layout.addWidget(QLabel("Developed by Robiul Molla"))
+        layout.addWidget(QLabel("iamrobiul94@gmail.com"))
+        ok_btn = QPushButton("OK")
+        ok_btn.clicked.connect(dlg.accept)
+        layout.addWidget(ok_btn)
+        dlg.exec()
 
     def _update_header_datetime(self) -> None:
         """Update the date/time display in the header."""
@@ -533,10 +606,17 @@ class DashboardWindow(QMainWindow):
         self.today_entries_label.setText("▮▮")
         self.total_patients_label.setText("▮▮")
         self.total_patients_trend.setVisible(False)
-        QApplication.processEvents()
-        self.refresh_stats()
+        QTimer.singleShot(0, self.refresh_stats)  # Defer to avoid blocking click response
 
     def refresh_stats(self) -> None:
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            self._refresh_stats_impl()
+        finally:
+            QApplication.restoreOverrideCursor()
+        self._show_status("Data refreshed.")
+
+    def _refresh_stats_impl(self) -> None:
         today = date.today()
         upcoming_limit = today + timedelta(days=UPCOMING_DAYS)
         edd_limit = today + timedelta(days=EDD_UPCOMING_DAYS)
@@ -545,17 +625,18 @@ class DashboardWindow(QMainWindow):
         try:
             cur = conn.cursor()
 
-            # Due soon & Overdue: use same logic as Patient Search (next visit by 60-day rule)
+            # Due soon & Overdue: use same logic as Patient Search (next scheduled visit)
             cur.execute(
                 """
-                SELECT visit1, visit2, visit3, final_visit FROM patients
+                SELECT visit1, visit2, visit3, final_visit, record_locked FROM patients
                 """
             )
             due_soon_count = 0
             overdue_count = 0
             for row in cur.fetchall():
-                v1, v2, v3, v4 = (parse_date_flex(v) for v in row)
-                next_due = get_next_visit_due(v1, v2, v3, v4, today)
+                v1, v2, v3, v4 = (parse_date_flex(v) for v in row[:4])
+                record_locked = bool(row[4]) if len(row) > 4 else False
+                next_due = get_next_visit_due(v1, v2, v3, v4, today, record_locked=record_locked)
                 if not next_due:
                     continue
                 if next_due < today:
@@ -622,6 +703,15 @@ class DashboardWindow(QMainWindow):
         dialog.exec()
 
     def _logout(self) -> None:
+        reply = QMessageBox.question(
+            self,
+            "Logout",
+            "Are you sure you want to logout?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
         self.hide()
         login = LoginWindow()
         if login.exec() == QDialog.Accepted and login.username and login.role:
@@ -665,12 +755,24 @@ class DashboardWindow(QMainWindow):
                     "Incorrect password. You cannot access the Administration Area.",
                 )
 
+    _PAGE_TITLES = (
+        "Dashboard",
+        "Register Patient",
+        "Search Patients",
+        "Reports",
+        "Backup Manager",
+        "Administration",
+    )
+
     def _set_active_page(self, index: int) -> None:
         self.stack.setCurrentIndex(index)
         if index == 3:
             self.reports_page.refresh_reports()
         elif index == 4:
             self._refresh_backup_list()
+
+        if 0 <= index < len(self._PAGE_TITLES):
+            self.setWindowTitle(f"Maternal Tracking – {self._PAGE_TITLES[index]}")
 
         nav_buttons = [
             self.dashboard_btn,
@@ -680,28 +782,57 @@ class DashboardWindow(QMainWindow):
             self.backup_btn,
             self.admin_btn,
         ]
+        prev = getattr(self, "_last_nav_index", -1)
         for i, btn in enumerate(nav_buttons):
-            btn.setProperty("active", "true" if i == index else "false")
-            btn.style().unpolish(btn)
-            btn.style().polish(btn)
+            active = i == index
+            btn.setProperty("active", "true" if active else "false")
+            if i == prev or i == index:
+                btn.style().unpolish(btn)
+                btn.style().polish(btn)
+        self._last_nav_index = index
 
     def open_patient_entry(self) -> None:
         dialog = PatientEntryDialog(username=self.username, role=self.role, parent=self)
         if dialog.exec() == QDialog.Accepted:
+            self._show_status("Patient saved successfully.")
             self.refresh_stats()
 
     def _open_search_with_filter(self, filter_mode: str) -> None:
-        dialog = PatientSearchDialog(
-            username=self.username, role=self.role, parent=self, filter_mode=filter_mode
-        )
-        dialog.exec()
-        self.refresh_stats()
+        try:
+            dialog = PatientSearchDialog(
+                username=self.username,
+                role=self.role,
+                parent=self,
+                filter_mode=filter_mode,
+                status_callback=self._show_status,
+            )
+            dialog.exec()
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Error",
+                f"Could not open Patient Search:\n{e}",
+            )
+        finally:
+            self.refresh_stats()
 
     def open_patient_search_dialog(self) -> None:
-        dialog = PatientSearchDialog(username=self.username, role=self.role, parent=self)
-        dialog.exec()
-        # Stats may have changed if user edited records from search dialog
-        self.refresh_stats()
+        try:
+            dialog = PatientSearchDialog(
+                username=self.username,
+                role=self.role,
+                parent=self,
+                status_callback=self._show_status,
+            )
+            dialog.exec()
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Error",
+                f"Could not open Patient Search:\n{e}",
+            )
+        finally:
+            self.refresh_stats()
 
     def _refresh_backup_list(self) -> None:
         backups = list_backups()
@@ -717,8 +848,13 @@ class DashboardWindow(QMainWindow):
             self.backup_table.item(i, 2).setToolTip(str(path))
 
     def _do_manual_backup(self) -> None:
-        result = create_manual_backup()
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            result = create_manual_backup()
+        finally:
+            QApplication.restoreOverrideCursor()
         if result:
+            self._show_status("Backup created successfully.")
             QMessageBox.information(
                 self, "Backup", f"Backup created successfully:\n{result.name}"
             )
@@ -818,7 +954,10 @@ class DashboardWindow(QMainWindow):
             msg.setIcon(QMessageBox.Information)
             msg.setWindowTitle("Restore Complete")
             msg.setText("Database restored successfully.")
-            msg.setInformativeText("The application must restart to use the restored data.")
+            msg.setInformativeText(
+                "Your current database was backed up before restore (pre_restore_*.db). "
+                "The application must restart to use the restored data."
+            )
             restart_btn = msg.addButton("Restart Now", QMessageBox.YesRole)
             later_btn = msg.addButton("Restart Later", QMessageBox.NoRole)
             msg.exec()
@@ -856,6 +995,7 @@ class DashboardWindow(QMainWindow):
                 msg.setWindowTitle("Restore Complete")
                 msg.setText("Database restored successfully.")
                 msg.setInformativeText(
+                    "Your current database was backed up before restore (pre_restore_*.db). "
                     "The application must restart to use the restored data."
                 )
                 restart_btn = msg.addButton("Restart Now", QMessageBox.YesRole)
@@ -878,6 +1018,7 @@ class DashboardWindow(QMainWindow):
         )
         if not path:
             return
+        QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
             imported, skipped, backup_path = import_from_excel(Path(path))
             msg_parts = [f"Imported: {imported} patient(s)"]
@@ -885,6 +1026,7 @@ class DashboardWindow(QMainWindow):
                 msg_parts.append(f"Skipped: {skipped} (missing data or duplicate patient ID)")
             if backup_path and imported > 0:
                 msg_parts.append(f"\nCopy saved to:\n{backup_path}")
+            self._show_status("Import complete.")
             QMessageBox.information(
                 self,
                 "Import Complete",
@@ -899,6 +1041,8 @@ class DashboardWindow(QMainWindow):
                 "Import Failed",
                 f"Could not import Excel file:\n{e}",
             )
+        finally:
+            QApplication.restoreOverrideCursor()
 
     def _restart_application(self) -> None:
         """Restart the application to apply restored database."""

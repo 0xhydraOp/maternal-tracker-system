@@ -6,7 +6,7 @@ from PySide6.QtCore import QTimer
 from PySide6.QtGui import QFont, QPixmap, QPainter, QColor
 from PySide6.QtWidgets import QApplication, QSplashScreen
 
-from config import get_dark_mode
+from config import APP_VERSION, get_dark_mode
 from database.init_db import init_db
 from services.backup_service import ensure_today_backup
 from styles import get_stylesheet
@@ -30,7 +30,7 @@ def main() -> int:
     painter.setFont(QFont("Segoe UI", 18))
     painter.drawText(pixmap.rect(), 0x0084, "Maternal Tracker System")
     painter.setFont(QFont("Segoe UI", 10))
-    painter.drawText(0, 0, pixmap.width(), pixmap.height() - 20, 0x0084, "Loading...")
+    painter.drawText(0, 0, pixmap.width(), pixmap.height() - 20, 0x0084, f"v{APP_VERSION}  ·  Loading...")
     painter.end()
     splash = QSplashScreen(pixmap)
     splash.show()

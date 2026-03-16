@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 import shutil
 
@@ -102,10 +102,36 @@ def create_manual_backup() -> Path | None:
     return target
 
 
-def restore_backup(backup_path: Path) -> bool:
-    """Restore database from backup. Returns True on success."""
+def create_pre_restore_backup() -> Path | None:
+    """
+    Create a backup of the current database before restore.
+    Saves as pre_restore_YYYYMMDD_HHMMSS.db in the backup folder.
+    Returns the backup path or None on failure.
+    """
+    if not DB_PATH.exists():
+        return None
+    backup_dir = _get_backup_dir()
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    target = backup_dir / f"pre_restore_{stamp}.db"
+    try:
+        shutil.copy2(DB_PATH, target)
+        return target
+    except OSError:
+        return None
+
+
+def restore_backup(backup_path: Path, create_backup_first: bool = True) -> bool:
+    """
+    Restore database from backup. Returns True on success.
+    If create_backup_first is True, creates a backup of current DB before restoring.
+    """
     if not backup_path.exists() or not backup_path.is_file():
         return False
+    if create_backup_first:
+        pre_backup = create_pre_restore_backup()
+        if not pre_backup and DB_PATH.exists():
+            return False  # Refuse to restore if we couldn't backup current DB
     try:
         shutil.copy2(backup_path, DB_PATH)
         return True

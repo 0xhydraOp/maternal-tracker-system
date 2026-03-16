@@ -36,6 +36,18 @@ The system manages:
 
 ---
 
+## UI Polish
+
+- **Status bar** – bottom of main window; shows brief feedback (e.g. "Patient saved successfully", "Data refreshed", "Backup created successfully", "Import complete")
+- **About dialog** – app name, version, copyright; opened from sidebar footer
+- **Tooltips** – on sidebar nav buttons (including shortcuts: Ctrl+N, Ctrl+F)
+- **Minimum window size** – 1024×600 px
+- **Cursor feedback** – wait cursor during heavy operations (stats refresh, backup, import, patient load, export)
+- **Splash screen** – shows app name and version (e.g. "v1.0.0 · Loading...") on startup
+- **Placeholders** – on Patient Search filters (Patient Name, Patient ID, Mobile, Village, Motivator, Block/Municipality)
+
+---
+
 ## Patient Data Fields
 
 Each patient record contains:
@@ -57,6 +69,10 @@ Each patient record contains:
 | Entry Date | Registration date (read-only in Patient Entry) |
 | Remarks | Optional notes |
 | Record Locked | 0 or 1 (set when Final Visit is entered) |
+| District | Fixed (Murshidabad) |
+| Block | Optional; selectable from district blocks |
+| Municipality | Optional; selectable from district municipalities |
+| Ward Number | Optional; for municipality records |
 
 ---
 
@@ -76,6 +92,7 @@ Each patient record contains:
 - Mobile: 10–15 digits
 - LMP date cannot be in the future
 - Phone numbers may repeat
+- **Visit order**: 1st Visit = Entry Date; 2nd ≥ 1st; 3rd ≥ 2nd; Final ≥ 3rd (or 2nd if 3rd empty)
 
 ---
 
@@ -125,9 +142,10 @@ Logged fields: patient_name, mobile_number, village_name, lmp_date, edd_date, mo
 
 ## Dashboard
 
-Statistics cards (clickable to open filtered Patient Search):
-- **Next Visit Due This Week** – next scheduled visit (by 60-day rule) is within 7 days
-- **Overdue Visits** – next scheduled visit (by 60-day rule) is in the past (matches Patient Search filter)
+- **Keyboard shortcuts:** Ctrl+N (Register Patient), Ctrl+F (Search Patients)
+- Statistics cards (clickable to open filtered Patient Search):
+- **Next Visit Due This Week** – next scheduled visit is within 7 days
+- **Overdue Visits** – next scheduled visit is in the past; detects "missed" visits (completed 1 missed 2, completed 12 missed 3, completed 123 missed final) via chain rule and `record_locked`
 - **EDD Within 30 Days** – expected delivery in next 30 days
 - **Today's Entries** – patients registered today
 
@@ -135,10 +153,11 @@ Statistics cards (clickable to open filtered Patient Search):
 
 ## Patient Search
 
-- Filters: Patient Name, Patient ID, Mobile, Motivator, Village, Entry Date, Date Range
-- Column order: Serial No, Entry Date, Patient Name, Patient ID, Village, Mobile, Motivator, LMP Date, EDD Date, 1st Visit, 2nd Visit, 3rd Visit, Final Visit, Remarks
-- Inline editing: EDD, visit dates, and Remarks (double-click to edit)
+- Filters: Patient Name, Patient ID, Mobile, Motivator, Village, Block/Municipality, Entry Date (presets: All, Last 7 days, Last 30 days, This Month, This Year, Custom range)
+- Column order: Serial No, Entry Date, Patient Name, Patient ID, Block, Municipality, Village, Ward, Mobile, Motivator, LMP Date, EDD Date, 1st Visit, 2nd Visit, 3rd Visit, Final Visit, Remarks
+- Inline editing: EDD, visit dates, and Remarks (double-click to edit); visit order validated (2nd ≥ 1st, 3rd ≥ 2nd, final ≥ previous)
 - Export to Excel (all or selected rows)
+- Enter key opens selected patient; debounced live filtering
 - STAFF cannot edit locked records inline
 
 ---
@@ -147,10 +166,11 @@ Statistics cards (clickable to open filtered Patient Search):
 
 Organized layout with filters in group boxes and result counts. Reports refresh automatically when navigating to the Reports tab.
 
-- **Patient List** – filters (date range, month, year, motivator, patient name, village) in a compact group; Apply/Export buttons; result count; export to Excel; custom date range auto-swaps if From > To
+- **Patient List** – filters (date presets: All, Last 7/30 days, This Month/Year, Custom; motivator, patient name, village, Block/Municipality); Apply/Export buttons; result count; export to Excel; custom date range auto-swaps if From > To
 - **Visit Completion** – completion rates for 1st, 2nd, 3rd, Final Visit
-- **Motivator Performance** – patients and visit completion by motivator
+- **Motivator Performance** – patients and visit completion by motivator; includes **Final %** (finalized completion percentage per motivator)
 - **Monthly Summary** – registrations, visits, overdue, EDD, completed (last 12 months)
+- **Block & Municipality** – tables showing patient counts and visits completed by block and by municipality
 - **Charts**:
   - Registrations per month (12 months ending with selected month/year)
   - Top Motivators – top 15 by patient count
@@ -166,16 +186,17 @@ Organized layout with filters in group boxes and result counts. Reports refresh 
 - **Naming format:** `backup_YYYY_MM_DD.db`
 - Keeps latest 30 backups; older ones deleted automatically
 - **Manual backup** – save copy to user-chosen location
-- **Restore** – restore from a `.db` file
+- **Restore** – restore from a `.db` file; creates pre-restore backup before overwriting
 
 ---
 
 ## Excel Import
 
 - Import patient records from Excel
-- Supported columns: patient name, mobile, village, lmp, edd, motivator, visit1–3, final visit, entry date, remarks, serial number
+- Supported columns: patient name, mobile, village, lmp, edd, motivator, visit1–3, final visit, entry date, remarks, serial number, district, block, municipality, ward
 - Patient ID auto-generated if not in file
 - Skips rows with missing patient name, missing mobile, invalid mobile (not 10–15 digits), or duplicate Patient ID
+- Visit order enforced: visit1 = entry_date; visit2 ≥ visit1; visit3 ≥ visit2; final ≥ visit3
 - On duplicate Patient ID (IntegrityError): skips row if ID from Excel; retries with new auto-generated ID (up to 5 times) if ID was auto-generated
 - Returns imported count and skipped count
 - Saves copy of imported file to backup folder
@@ -193,6 +214,10 @@ Organized layout with filters in group boxes and result counts. Reports refresh 
 | patient_id | TEXT NOT NULL UNIQUE |
 | mobile_number | TEXT |
 | village_name | TEXT |
+| district_name | TEXT |
+| block_name | TEXT |
+| municipality_name | TEXT |
+| ward_number | TEXT |
 | lmp_date | TEXT |
 | edd_date | TEXT |
 | motivator_name | TEXT |
@@ -244,8 +269,8 @@ Organized layout with filters in group boxes and result counts. Reports refresh 
 
 ## Application Screens
 
-- **Login** – username/password, default admin/admin123
-- **Dashboard** – stats cards, quick actions
+- **Login** – square window (520×520 px), username/password, default admin/admin123
+- **Dashboard** – stats cards, quick actions; status bar; minimum size 1024×600; About button in sidebar footer
 - **Patient Entry** – add/edit patient (full form); 1st Visit = Entry Date; motivator "Others" with "Please specify" field
 - **Patient Search** – filter, inline edit, export
 - **Reports** – Patient List, Visit Completion, Motivator Performance, Monthly Summary, Charts
@@ -264,7 +289,7 @@ Organized layout with filters in group boxes and result counts. Reports refresh 
 ```
 maternal_tracking/
 ├── main.py                 # Entry point
-├── config.py               # Config (admin password, dark mode, backup dir)
+├── config.py               # Config (APP_VERSION, admin password, dark mode, backup dir)
 ├── config.json             # User settings (created at runtime)
 ├── styles.py               # Light/dark theme stylesheets
 ├── requirements.txt
@@ -288,6 +313,7 @@ maternal_tracking/
 │   ├── activity_logger.py
 │   ├── motivator_service.py
 │   ├── village_service.py
+│   ├── location_service.py   # District, blocks, municipalities (Murshidabad)
 │   ├── password_service.py
 │   ├── excel_import_service.py
 │   └── visit_scheduler.py
@@ -298,14 +324,25 @@ maternal_tracking/
 │   ├── icon.png            # App icon (created at runtime if missing)
 │   └── icon.ico            # Windows icon (created by build script)
 ├── scripts/
-│   ├── seed_patients.py
-│   └── create_icon_ico.py
+│   ├── clear_dummy_data.py   # Remove all patient data from DB
+│   ├── fix_visit_dates.py    # Repair invalid visit date order
+│   └── create_icon_ico.py    # Generate Windows icon
+├── tests/
+│   └── test_all_functions.py   # Unit tests
 ├── installer.iss           # Inno Setup script
 ├── version_info.txt       # Windows exe version metadata
 ├── LICENSE.txt            # Shown during installer
 ├── WELCOME.txt            # Installer welcome text
 └── backups/               # Created at runtime
 ```
+
+### Scripts
+
+| Script | Purpose |
+|-------|---------|
+| `python -m scripts.clear_dummy_data` | Remove all patients and change logs from DB |
+| `python -m scripts.fix_visit_dates` | Repair invalid visit date order in existing records |
+| `python -m scripts.create_icon_ico` | Generate `icon.ico` for Windows build |
 
 ---
 
@@ -344,11 +381,18 @@ pyinstaller --clean --noconfirm maternal_tracking.spec --distpath .
 
 When run as `.exe`, config, database, and backups are stored next to the executable. The app detects frozen (compiled) mode and uses paths relative to the executable.
 
+### Run tests
+
+```powershell
+python -m unittest tests.test_all_functions -v
+```
+
 ---
 
 ## Configuration
 
-Stored in `config.json` (created on first settings change):
+- **Version** – `APP_VERSION` in `config.py` (e.g. 1.0.0); used in splash screen and About dialog
+- Stored in `config.json` (created on first settings change):
 - `admin_area_password` – password for Administration Area
 - `dark_mode` – light or dark theme
 - `backup_dir` – path for backup files

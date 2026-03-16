@@ -27,7 +27,11 @@ from database.init_db import get_connection
 from utils.date_utils import DATE_FORMAT_DISPLAY, parse_date as parse_date_flex
 from services.change_logger import log_change
 from services.motivator_service import add_custom_motivator, get_all_motivator_names
-from services.village_service import get_all_village_names
+from services.location_service import (
+    get_district_name,
+    get_block_names,
+    get_municipality_names,
+)
 
 
 MOTIVATOR_OTHERS = "Others"
@@ -482,9 +486,19 @@ class PatientEntryDialog(QDialog):
         self.patient_id_edit = QLineEdit()
         self.patient_id_edit.setReadOnly(True)
         self.mobile_edit = QLineEdit()
-        self.village_combo = QComboBox()
-        self.village_combo.setEditable(True)
-        self.village_combo.addItems(get_all_village_names())
+        self.district_edit = QLineEdit()
+        self.district_edit.setText(get_district_name())
+        self.district_edit.setReadOnly(True)
+        self.area_type_combo = QComboBox()
+        self.area_type_combo.addItems(["Block", "Municipality"])
+        self.area_type_combo.currentTextChanged.connect(self._on_area_type_changed)
+        self.area_value_combo = QComboBox()
+        self.area_value_combo.addItem("Select block...")
+        self.area_value_combo.addItems(get_block_names())
+        self.village_edit = QLineEdit()
+        self.village_edit.setPlaceholderText("Enter village name")
+        self.ward_edit = QLineEdit()
+        self.ward_edit.setPlaceholderText("Enter ward number")
 
         today_qdate = QDate.currentDate()
 
@@ -508,6 +522,8 @@ class PatientEntryDialog(QDialog):
 
         self.motivator_other_edit = QLineEdit()
         self.motivator_other_edit.setPlaceholderText("Please specify")
+        self.motivator_other_edit.setMinimumWidth(220)
+        self.motivator_other_edit.setMinimumHeight(32)
 
         self.visit1_edit = make_date_edit()
         self.visit1_edit.setReadOnly(True)  # 1st Visit = Entry Date (always)
@@ -530,7 +546,10 @@ class PatientEntryDialog(QDialog):
         self._editable_widgets = [
             self.name_edit,
             self.mobile_edit,
-            self.village_combo,
+            self.area_type_combo,
+            self.area_value_combo,
+            self.village_edit,
+            self.ward_edit,
             self.motivator_combo,
             self.motivator_other_edit,
             self.lmp_edit,
@@ -569,7 +588,16 @@ class PatientEntryDialog(QDialog):
         info_form.addRow(make_label("Patient Name:", required=True), self.name_edit)
         info_form.addRow(make_label("Patient ID (auto):"), self.patient_id_edit)
         info_form.addRow(make_label("Mobile Number:", required=True), self.mobile_edit)
-        info_form.addRow(make_label("Village Name:", required=True), self.village_combo)
+        info_form.addRow(make_label("District:"), self.district_edit)
+        info_form.addRow(make_label("Block / Municipality:", required=True), self.area_type_combo)
+        self.area_value_label = make_label("Select Block:", required=True)
+        info_form.addRow(self.area_value_label, self.area_value_combo)
+        self.village_label = make_label("Village:", required=True)
+        info_form.addRow(self.village_label, self.village_edit)
+        self.ward_label = make_label("Ward No.:", required=True)
+        info_form.addRow(self.ward_label, self.ward_edit)
+        self.ward_label.setVisible(False)
+        self.ward_edit.setVisible(False)
         motivator_container = QFrame()
         motivator_vbox = QVBoxLayout(motivator_container)
         motivator_vbox.setContentsMargins(0, 0, 0, 0)
@@ -643,6 +671,10 @@ class PatientEntryDialog(QDialog):
 
         # When Entry Date changes, update 1st Visit to match
         self.entry_date_edit.dateChanged.connect(self._update_first_visit)
+        # Enforce visit order: 2nd >= 1st, 3rd >= 2nd, final >= 3rd
+        self.visit1_edit.dateChanged.connect(self._update_visit_min_dates)
+        self.visit2_edit.dateChanged.connect(self._update_visit_min_dates)
+        self.visit3_edit.dateChanged.connect(self._update_visit_min_dates)
 
         # Wire up automatic EDD calculation from LMP only
         self.lmp_edit.dateChanged.connect(self._update_edd_from_lmp)
@@ -655,7 +687,9 @@ class PatientEntryDialog(QDialog):
         # Track unsaved changes for close confirmation
         self.name_edit.textChanged.connect(self._mark_dirty)
         self.mobile_edit.textChanged.connect(self._mark_dirty)
-        self.village_combo.currentTextChanged.connect(self._mark_dirty)
+        self.area_value_combo.currentTextChanged.connect(self._mark_dirty)
+        self.village_edit.textChanged.connect(self._mark_dirty)
+        self.ward_edit.textChanged.connect(self._mark_dirty)
         self.motivator_combo.currentTextChanged.connect(self._mark_dirty)
         self.motivator_other_edit.textChanged.connect(self._mark_dirty)
         self.lmp_edit.dateChanged.connect(self._mark_dirty)
@@ -734,6 +768,34 @@ class PatientEntryDialog(QDialog):
         else:
             self.motivator_other_edit.clear()
 
+    def _on_area_type_changed(self, text: str) -> None:
+        """When Block or Municipality selected, show the corresponding dropdown and Village or Ward box."""
+        self.area_value_combo.blockSignals(True)
+        self.area_value_combo.clear()
+        if text == "Block":
+            self.area_value_label.setText("Select Block: *")
+            self.area_value_combo.addItem("Select block...")
+            self.area_value_combo.addItems(get_block_names())
+            self.village_label.setVisible(True)
+            self.village_edit.setVisible(True)
+            self.village_edit.clear()
+            self.ward_label.setVisible(False)
+            self.ward_edit.setVisible(False)
+            self.ward_edit.clear()
+        elif text == "Municipality":
+            self.area_value_label.setText("Select Municipality: *")
+            self.area_value_combo.addItem("Select municipality...")
+            self.area_value_combo.addItems(get_municipality_names())
+            self.village_label.setVisible(False)
+            self.village_edit.setVisible(False)
+            self.village_edit.clear()
+            self.ward_label.setVisible(True)
+            self.ward_edit.setVisible(True)
+            self.ward_edit.clear()
+        self.area_value_combo.setCurrentIndex(0)
+        self.area_value_combo.blockSignals(False)
+        self._mark_dirty()
+
     def _set_read_only(self, locked: bool) -> None:
         """Disable editing when record is locked and user is STAFF."""
         for w in self._editable_widgets:
@@ -758,6 +820,18 @@ class PatientEntryDialog(QDialog):
     def _update_first_visit(self, qdate: QDate) -> None:
         """When Entry Date changes, set 1st Visit to the same date."""
         self.visit1_edit.setDate(qdate)
+        self._update_visit_min_dates()
+
+    def _update_visit_min_dates(self) -> None:
+        """Set minimum dates so 2nd >= 1st, 3rd >= 2nd, final >= 3rd."""
+        v1 = self.visit1_edit.date()
+        v2 = self.visit2_edit.date()
+        v3 = self.visit3_edit.date()
+        self.visit2_edit.setMinimumDate(v1 if v1.isValid() else EMPTY_DATE_SENTINEL)
+        min3 = v2 if v2.isValid() and v2 != EMPTY_DATE_SENTINEL else v1
+        self.visit3_edit.setMinimumDate(min3 if min3.isValid() else EMPTY_DATE_SENTINEL)
+        min_final = v3 if v3.isValid() and v3 != EMPTY_DATE_SENTINEL else min3
+        self.final_visit_edit.setMinimumDate(min_final if min_final.isValid() else EMPTY_DATE_SENTINEL)
 
     def load_patient(self) -> None:
         patient_id = self.patient_id_edit.text().strip()
@@ -773,7 +847,11 @@ class PatientEntryDialog(QDialog):
                     patient_name,
                     patient_id,
                     mobile_number,
+                    district_name,
+                    block_name,
+                    municipality_name,
                     village_name,
+                    ward_number,
                     lmp_date,
                     edd_date,
                     motivator_name,
@@ -800,7 +878,11 @@ class PatientEntryDialog(QDialog):
             patient_name,
             _pid,
             mobile_number,
+            district_name,
+            block_name,
+            municipality_name,
             village_name,
+            ward_number,
             lmp_date_str,
             edd_date_str,
             motivator_name,
@@ -829,12 +911,33 @@ class PatientEntryDialog(QDialog):
 
         self.name_edit.setText(patient_name or "")
         self.mobile_edit.setText(mobile_number or "")
-        village = village_name or ""
-        idx = self.village_combo.findText(village)
-        if idx >= 0:
-            self.village_combo.setCurrentIndex(idx)
-        else:
-            self.village_combo.setCurrentText(village)
+        self.district_edit.setText(district_name or get_district_name())
+        self.area_type_combo.blockSignals(True)
+        try:
+            if block_name:
+                self.area_type_combo.setCurrentText("Block")
+                self._on_area_type_changed("Block")
+                idx = self.area_value_combo.findText(block_name)
+                if idx >= 0:
+                    self.area_value_combo.setCurrentIndex(idx)
+                else:
+                    self.area_value_combo.setCurrentIndex(0)
+                self.village_edit.setText(village_name or "")
+            elif municipality_name:
+                self.area_type_combo.setCurrentText("Municipality")
+                self._on_area_type_changed("Municipality")
+                idx = self.area_value_combo.findText(municipality_name)
+                if idx >= 0:
+                    self.area_value_combo.setCurrentIndex(idx)
+                else:
+                    self.area_value_combo.setCurrentIndex(0)
+                self.ward_edit.setText(ward_number or "")
+            else:
+                self.area_type_combo.setCurrentIndex(0)
+                self._on_area_type_changed("Block")
+                self.area_value_combo.setCurrentIndex(0)
+        finally:
+            self.area_type_combo.blockSignals(False)
         if motivator_name and motivator_name in get_all_motivator_names():
             self.motivator_combo.setCurrentText(motivator_name)
             self.motivator_other_edit.clear()
@@ -848,22 +951,36 @@ class PatientEntryDialog(QDialog):
             self.motivator_other_edit.clear()
             self.motivator_specify_widget.setVisible(False)
 
-        for editor, value in (
-            (self.lmp_edit, lmp_date_str),
-            (self.edd_edit, edd_date_str),
-            (self.entry_date_edit, entry_date_str),
-            (self.visit1_edit, entry_date_str),  # 1st Visit = Entry Date
-            (self.visit2_edit, visit2_str),
-            (self.visit3_edit, visit3_str),
-            (self.final_visit_edit, final_visit_str),
+        entry_d = parse_date_flex(entry_date_str)
+        v1_d = entry_d  # 1st Visit = Entry Date always
+        v2_d = parse_date_flex(visit2_str)
+        v3_d = parse_date_flex(visit3_str)
+        final_d = parse_date_flex(final_visit_str)
+        # Fix invalid order: visit2 >= visit1, visit3 >= visit2, final >= visit3
+        if v2_d and v1_d and v2_d < v1_d:
+            v2_d = None
+        if v3_d and v2_d and v3_d < v2_d:
+            v3_d = None
+        if final_d and v3_d and final_d < v3_d:
+            final_d = None
+        if final_d and v2_d and not v3_d and final_d < v2_d:
+            final_d = None
+
+        self.entry_date_edit.setDate(self._date_to_qdate(entry_d) if entry_d else QDate.currentDate())
+        self.visit1_edit.setDate(self._date_to_qdate(v1_d) if v1_d else self.entry_date_edit.date())
+        for editor, d in (
+            (self.visit2_edit, v2_d),
+            (self.visit3_edit, v3_d),
+            (self.final_visit_edit, final_d),
         ):
-            d = parse_date_flex(value)
             if d:
                 editor.setDate(self._date_to_qdate(d))
-            elif editor in (self.visit2_edit, self.visit3_edit, self.final_visit_edit):
-                editor.setDate(EMPTY_DATE_SENTINEL)  # Show empty until user selects
+            else:
+                editor.setDate(EMPTY_DATE_SENTINEL)
+        self.lmp_edit.setDate(self._date_to_qdate(parse_date_flex(lmp_date_str)) if lmp_date_str else EMPTY_DATE_SENTINEL)
+        self.edd_edit.setDate(self._date_to_qdate(parse_date_flex(edd_date_str)) if edd_date_str else EMPTY_DATE_SENTINEL)
 
-        self.remarks_edit.setText(remarks_str or "")
+        self._update_visit_min_dates()
 
         self._loaded_patient_exists = True
         self._dirty = False  # Reset after loading
@@ -896,7 +1013,19 @@ class PatientEntryDialog(QDialog):
 
         # New registration: required fields
         mobile_number = self.mobile_edit.text().strip()
-        village_name = self.village_combo.currentText().strip()
+        district_name = self.district_edit.text().strip() or get_district_name()
+        area_type = self.area_type_combo.currentText()
+        area_value = self.area_value_combo.currentText().strip()
+        if area_type == "Block":
+            block_name = area_value if area_value and area_value != "Select block..." else None
+            municipality_name = None
+            village_name = self.village_edit.text().strip() or None
+            ward_number = None
+        else:
+            block_name = None
+            municipality_name = area_value if area_value and area_value != "Select municipality..." else None
+            village_name = None
+            ward_number = self.ward_edit.text().strip() or None
         motivator_selection = self.motivator_combo.currentText().strip()
         motivator_name = (
             self.motivator_other_edit.text().strip()
@@ -904,11 +1033,39 @@ class PatientEntryDialog(QDialog):
             else motivator_selection
         )
 
-        if not patient_name or not mobile_number or not village_name or not motivator_name:
+        if not patient_name or not mobile_number or not motivator_name:
             QMessageBox.warning(
                 self,
                 "Validation Error",
-                "Please fill all mandatory fields: Patient Name, Mobile Number, Village Name, and Motivator Name.",
+                "Please fill all mandatory fields: Patient Name, Mobile Number, and Motivator Name.",
+            )
+            return
+        if area_type == "Block" and (not area_value or area_value == "Select block..."):
+            QMessageBox.warning(
+                self,
+                "Validation Error",
+                "Please select a Block.",
+            )
+            return
+        if area_type == "Municipality" and (not area_value or area_value == "Select municipality..."):
+            QMessageBox.warning(
+                self,
+                "Validation Error",
+                "Please select a Municipality.",
+            )
+            return
+        if area_type == "Block" and not self.village_edit.text().strip():
+            QMessageBox.warning(
+                self,
+                "Validation Error",
+                "Please enter Village name.",
+            )
+            return
+        if area_type == "Municipality" and not self.ward_edit.text().strip():
+            QMessageBox.warning(
+                self,
+                "Validation Error",
+                "Please enter Ward No.",
             )
             return
         if motivator_selection == MOTIVATOR_OTHERS and not self.motivator_other_edit.text().strip():
@@ -978,7 +1135,7 @@ class PatientEntryDialog(QDialog):
                     pid, pname, db_mobile, db_village = row
                     db_digits = "".join(c for c in (db_mobile or "") if c.isdigit())
                     same_mobile = db_digits and digits_only and db_digits == digits_only
-                    same_village = (village_name or "").lower() == (db_village or "").lower()
+                    same_village = bool(village_name) and (village_name or "").lower() == (db_village or "").lower()
                     if same_mobile or same_village:
                         dup = (pid, pname)
                         break
@@ -1005,6 +1162,43 @@ class PatientEntryDialog(QDialog):
         final_visit_str = self._get_optional_visit_date_str(self.final_visit_edit)
         entry_date_str = self._get_date_str(self.entry_date_edit)
 
+        # Validate: visit1 = entry_date; visit2 >= visit1; visit3 >= visit2; final >= visit3
+        entry_d = parse_date_flex(entry_date_str)
+        v1_d = parse_date_flex(visit1_str)
+        v2_d = parse_date_flex(visit2_str) if visit2_str else None
+        v3_d = parse_date_flex(visit3_str) if visit3_str else None
+        final_d = parse_date_flex(final_visit_str) if final_visit_str else None
+        if entry_d and v1_d and entry_d != v1_d:
+            QMessageBox.warning(
+                self, "Validation Error",
+                "1st Visit must equal Entry Date.",
+            )
+            return
+        if v2_d and v1_d and v2_d < v1_d:
+            QMessageBox.warning(
+                self, "Validation Error",
+                "2nd Visit cannot be before 1st Visit.",
+            )
+            return
+        if v3_d and v2_d and v3_d < v2_d:
+            QMessageBox.warning(
+                self, "Validation Error",
+                "3rd Visit cannot be before 2nd Visit.",
+            )
+            return
+        if final_d and v3_d and final_d < v3_d:
+            QMessageBox.warning(
+                self, "Validation Error",
+                "Final Visit cannot be before 3rd Visit.",
+            )
+            return
+        if final_d and v2_d and not v3_d and final_d < v2_d:
+            QMessageBox.warning(
+                self, "Validation Error",
+                "Final Visit cannot be before 2nd Visit.",
+            )
+            return
+
         conn = get_connection()
         try:
             cur = conn.cursor()
@@ -1017,7 +1211,11 @@ class PatientEntryDialog(QDialog):
                     serial_number,
                     patient_name,
                     mobile_number,
+                    district_name,
+                    block_name,
+                    municipality_name,
                     village_name,
+                    ward_number,
                     lmp_date,
                     edd_date,
                     motivator_name,
@@ -1062,7 +1260,11 @@ class PatientEntryDialog(QDialog):
                             patient_name,
                             patient_id,
                             mobile_number,
+                            district_name,
+                            block_name,
+                            municipality_name,
                             village_name,
+                            ward_number,
                             lmp_date,
                             edd_date,
                             motivator_name,
@@ -1073,14 +1275,18 @@ class PatientEntryDialog(QDialog):
                             entry_date,
                             record_locked,
                             remarks
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             serial_number,
                             patient_name,
                             patient_id,
                             mobile_number,
+                            district_name,
+                            block_name,
+                            municipality_name,
                             village_name,
+                            ward_number,
                             lmp_date_str,
                             edd_date_str,
                             motivator_name,
@@ -1113,7 +1319,11 @@ class PatientEntryDialog(QDialog):
                     serial_number,
                     old_patient_name,
                     old_mobile_number,
+                    old_district_name,
+                    old_block_name,
+                    old_municipality_name,
                     old_village_name,
+                    old_ward_number,
                     old_lmp_date,
                     old_edd_date,
                     old_motivator_name,
@@ -1135,7 +1345,11 @@ class PatientEntryDialog(QDialog):
                 all_fields = [
                     ("patient_name", old_patient_name, patient_name),
                     ("mobile_number", old_mobile_number, mobile_number),
+                    ("district_name", old_district_name, district_name),
+                    ("block_name", old_block_name, block_name),
+                    ("municipality_name", old_municipality_name, municipality_name),
                     ("village_name", old_village_name, village_name),
+                    ("ward_number", old_ward_number, ward_number),
                     ("lmp_date", old_lmp_date, lmp_date_str),
                     ("edd_date", old_edd_date, edd_date_str),
                     ("motivator_name", old_motivator_name, motivator_name),
@@ -1176,7 +1390,11 @@ class PatientEntryDialog(QDialog):
                     SET
                         patient_name = ?,
                         mobile_number = ?,
+                        district_name = ?,
+                        block_name = ?,
+                        municipality_name = ?,
                         village_name = ?,
+                        ward_number = ?,
                         lmp_date = ?,
                         edd_date = ?,
                         motivator_name = ?,
@@ -1192,7 +1410,11 @@ class PatientEntryDialog(QDialog):
                     (
                         patient_name,
                         mobile_number,
+                        district_name,
+                        block_name,
+                        municipality_name,
                         village_name,
+                        ward_number,
                         lmp_date_str,
                         edd_date_str,
                         motivator_name,

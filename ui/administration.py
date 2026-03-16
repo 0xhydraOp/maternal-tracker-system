@@ -142,10 +142,16 @@ class AdministrationWidget(QWidget):
         self.users_table.setHorizontalHeaderLabels(["ID", "Username", "Role", "Created"])
         self.users_table.horizontalHeader().setVisible(True)
         self.users_table.horizontalHeader().setMinimumHeight(36)
+        self.users_table.horizontalHeader().setMinimumSectionSize(80)
         self.users_table.horizontalHeader().setStretchLastSection(True)
+        self.users_table.setMinimumWidth(450)
+        for col, width in enumerate([60, 120, 80, 130]):
+            self.users_table.setColumnWidth(col, width)
         self.users_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.users_table.setSelectionMode(QTableWidget.SingleSelection)
         self.users_table.setAlternatingRowColors(True)
+        self.users_table.setShowGrid(True)
+        self.users_table.verticalHeader().setVisible(False)
         self.users_table.cellDoubleClicked.connect(lambda r, c: self._edit_user())
         layout.addWidget(self.users_table)
         self._load_users()
@@ -217,10 +223,16 @@ class AdministrationWidget(QWidget):
         )
         self.patients_table.horizontalHeader().setVisible(True)
         self.patients_table.horizontalHeader().setMinimumHeight(40)
+        self.patients_table.horizontalHeader().setMinimumSectionSize(80)
         self.patients_table.horizontalHeader().setStretchLastSection(True)
+        self.patients_table.setMinimumWidth(800)
+        for col, width in enumerate([95, 130, 100, 100, 95, 120, 95, 100, 60]):
+            self.patients_table.setColumnWidth(col, width)
         self.patients_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.patients_table.setSelectionMode(QTableWidget.SingleSelection)
         self.patients_table.setAlternatingRowColors(True)
+        self.patients_table.setShowGrid(True)
+        self.patients_table.verticalHeader().setVisible(False)
         self.patients_table.cellDoubleClicked.connect(lambda r, c: self._edit_patient())
         layout.addWidget(self.patients_table)
         self._load_patients()
@@ -268,10 +280,16 @@ class AdministrationWidget(QWidget):
         self.logs_table.setColumnCount(6)
         self.logs_table.horizontalHeader().setVisible(True)
         self.logs_table.horizontalHeader().setMinimumHeight(40)
+        self.logs_table.horizontalHeader().setMinimumSectionSize(80)
         self.logs_table.setHorizontalHeaderLabels(
             ["Date", "Patient ID", "Field", "Old Value", "New Value", "Changed By"]
         )
         self.logs_table.horizontalHeader().setStretchLastSection(True)
+        self.logs_table.setMinimumWidth(700)
+        self.logs_table.setShowGrid(True)
+        self.logs_table.verticalHeader().setVisible(False)
+        for col, width in enumerate([95, 100, 100, 120, 120, 100]):
+            self.logs_table.setColumnWidth(col, width)
         self.logs_table.setAlternatingRowColors(True)
         layout.addWidget(self.logs_table)
         self._load_change_logs()
@@ -301,9 +319,15 @@ class AdministrationWidget(QWidget):
         self.motivators_table.setHorizontalHeaderLabels(["Name", "Added At"])
         self.motivators_table.horizontalHeader().setVisible(True)
         self.motivators_table.horizontalHeader().setMinimumHeight(40)
+        self.motivators_table.horizontalHeader().setMinimumSectionSize(80)
         self.motivators_table.horizontalHeader().setStretchLastSection(True)
+        self.motivators_table.setMinimumWidth(400)
+        for col, width in enumerate([250, 120]):
+            self.motivators_table.setColumnWidth(col, width)
         self.motivators_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.motivators_table.setAlternatingRowColors(True)
+        self.motivators_table.setShowGrid(True)
+        self.motivators_table.verticalHeader().setVisible(False)
         layout.addWidget(self.motivators_table)
         self._load_motivators()
         return w
@@ -317,12 +341,25 @@ class AdministrationWidget(QWidget):
         # Password
         pwd_group = QGroupBox("Admin Area Password")
         pwd_form = QFormLayout(pwd_group)
-        self.admin_pwd_edit = QLineEdit()
-        self.admin_pwd_edit.setEchoMode(QLineEdit.Password)
-        self.admin_pwd_edit.setPlaceholderText("Enter new password")
-        pwd_btn = QPushButton("Set Password")
+        self.admin_current_pwd_edit = QLineEdit()
+        self.admin_current_pwd_edit.setEchoMode(QLineEdit.Password)
+        self.admin_current_pwd_edit.setPlaceholderText("Enter current password")
+        self.admin_new_pwd_edit = QLineEdit()
+        self.admin_new_pwd_edit.setEchoMode(QLineEdit.Password)
+        self.admin_new_pwd_edit.setPlaceholderText("Enter new password")
+        self.admin_confirm_pwd_edit = QLineEdit()
+        self.admin_confirm_pwd_edit.setEchoMode(QLineEdit.Password)
+        self.admin_confirm_pwd_edit.setPlaceholderText("Re-enter new password")
+        self.admin_show_pwd_check = QCheckBox("Show passwords")
+        self.admin_show_pwd_check.stateChanged.connect(self._on_admin_show_pwd_changed)
+        pwd_btn = QPushButton("Change Password")
         pwd_btn.clicked.connect(self._set_admin_password)
-        pwd_form.addRow("Password:", self.admin_pwd_edit)
+        for edit in (self.admin_current_pwd_edit, self.admin_new_pwd_edit, self.admin_confirm_pwd_edit):
+            edit.returnPressed.connect(self._set_admin_password)
+        pwd_form.addRow("Current password:", self.admin_current_pwd_edit)
+        pwd_form.addRow("New password:", self.admin_new_pwd_edit)
+        pwd_form.addRow("Confirm new password:", self.admin_confirm_pwd_edit)
+        pwd_form.addRow("", self.admin_show_pwd_check)
         pwd_form.addRow("", pwd_btn)
         layout.addWidget(pwd_group)
 
@@ -358,14 +395,33 @@ class AdministrationWidget(QWidget):
             log_admin_activity("SETTINGS_CHANGE", f"Backup folder changed to: {folder}", self.username)
             QMessageBox.information(self, "Saved", "Backup folder updated. New backups will use this location.")
 
+    def _on_admin_show_pwd_changed(self, state: int) -> None:
+        visible = state == 2  # Qt.Checked
+        mode = QLineEdit.Normal if visible else QLineEdit.Password
+        self.admin_current_pwd_edit.setEchoMode(mode)
+        self.admin_new_pwd_edit.setEchoMode(mode)
+        self.admin_confirm_pwd_edit.setEchoMode(mode)
+
     def _set_admin_password(self) -> None:
-        pwd = self.admin_pwd_edit.text().strip()
-        if not pwd:
-            QMessageBox.warning(self, "Validation", "Enter a password.")
+        current = self.admin_current_pwd_edit.text().strip()
+        new_pwd = self.admin_new_pwd_edit.text().strip()
+        confirm = self.admin_confirm_pwd_edit.text().strip()
+        if not current:
+            QMessageBox.warning(self, "Validation", "Enter your current password.")
             return
-        set_admin_area_password(pwd)
-        self.admin_pwd_edit.clear()
-        self.admin_pwd_edit.setPlaceholderText("Password updated")
+        if current != get_admin_area_password():
+            QMessageBox.warning(self, "Validation", "Current password is incorrect.")
+            return
+        if not new_pwd:
+            QMessageBox.warning(self, "Validation", "Enter a new password.")
+            return
+        if new_pwd != confirm:
+            QMessageBox.warning(self, "Validation", "New password and confirmation do not match.")
+            return
+        set_admin_area_password(new_pwd)
+        self.admin_current_pwd_edit.clear()
+        self.admin_new_pwd_edit.clear()
+        self.admin_confirm_pwd_edit.clear()
         log_admin_activity("SETTINGS_CHANGE", "Admin area password updated", self.username)
         QMessageBox.information(self, "Saved", "Admin Area password has been updated.")
 
@@ -396,7 +452,7 @@ class AdministrationWidget(QWidget):
             self.users_table.setItem(i, 1, QTableWidgetItem(uname or ""))
             self.users_table.setItem(i, 2, QTableWidgetItem(role or ""))
             self.users_table.setItem(i, 3, QTableWidgetItem(created or ""))
-        self.users_table.resizeColumnsToContents()
+        # Keep explicit column widths - avoid resizeColumnsToContents
         self._refresh_stats()
 
     def _add_user(self) -> None:
@@ -583,7 +639,7 @@ class AdministrationWidget(QWidget):
             display = [entry, name, pid, village, mobile, motivator, final, remarks or "", locked]
             for j, val in enumerate(display):
                 self.patients_table.setItem(i, j, QTableWidgetItem("" if val is None else str(val)))
-        self.patients_table.resizeColumnsToContents()
+        # Keep explicit column widths - avoid resizeColumnsToContents
         self._refresh_stats()
 
     def _edit_patient(self) -> None:
@@ -707,7 +763,7 @@ class AdministrationWidget(QWidget):
         for i, row in enumerate(rows):
             for j, val in enumerate(row):
                 self.logs_table.setItem(i, j, QTableWidgetItem("" if val is None else str(val)))
-        self.logs_table.resizeColumnsToContents()
+        # Keep explicit column widths - avoid resizeColumnsToContents
         self._refresh_stats()
 
     def _load_motivators(self) -> None:
@@ -722,7 +778,7 @@ class AdministrationWidget(QWidget):
         for i, (name, added) in enumerate(rows):
             self.motivators_table.setItem(i, 0, QTableWidgetItem(name or ""))
             self.motivators_table.setItem(i, 1, QTableWidgetItem(added or ""))
-        self.motivators_table.resizeColumnsToContents()
+        # Keep explicit column widths - avoid resizeColumnsToContents
 
     def _add_motivator(self) -> None:
         dlg = QDialog(self)

@@ -96,6 +96,13 @@ def init_db(db_path: Optional[Path] = None) -> None:
         except sqlite3.OperationalError:
             pass  # Column already exists
 
+        # Add location columns (district, block, municipality, ward_number)
+        for col in ("district_name", "block_name", "municipality_name", "ward_number"):
+            try:
+                cur.execute(f"ALTER TABLE patients ADD COLUMN {col} TEXT;")
+            except sqlite3.OperationalError:
+                pass
+
         # custom_motivators: names added via "Others" > "Please specify"
         cur.execute(
             """

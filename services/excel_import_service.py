@@ -14,6 +14,7 @@ import pandas as pd
 
 from database.init_db import get_connection
 from services.backup_service import get_backup_dir_path
+from services.location_service import get_district_name
 from utils.date_utils import parse_date, format_for_storage, EMPTY_DATE_SENTINEL, EMPTY_DATE_SENTINEL_ALT
 
 
@@ -23,6 +24,10 @@ COLUMN_MAP = {
     "patient_id": ["patient id", "patient_id", "patientid", "id"],
     "mobile_number": ["mobile", "mobile number", "phone", "mobile_number", "contact"],
     "village_name": ["village", "village name", "village_name"],
+    "district_name": ["district", "district name", "district_name"],
+    "block_name": ["block", "block name", "block_name"],
+    "municipality_name": ["municipality", "municipality name", "municipality_name"],
+    "ward_number": ["ward", "ward number", "ward_number", "ward no"],
     "lmp_date": ["lmp", "lmp date", "lmp_date", "last menstrual period"],
     "edd_date": ["edd", "edd date", "edd_date", "expected date of delivery"],
     "motivator_name": ["motivator", "motivator name", "motivator_name"],
@@ -110,6 +115,10 @@ def import_from_excel(
     col_patient_id = _find_column(df, "patient_id")
     col_mobile = _find_column(df, "mobile_number")
     col_village = _find_column(df, "village_name")
+    col_district = _find_column(df, "district_name")
+    col_block = _find_column(df, "block_name")
+    col_municipality = _find_column(df, "municipality_name")
+    col_ward = _find_column(df, "ward_number")
     col_lmp = _find_column(df, "lmp_date")
     col_edd = _find_column(df, "edd_date")
     col_motivator = _find_column(df, "motivator_name")
@@ -175,16 +184,36 @@ def import_from_excel(
                 serial_int = None
 
             patient_id_from_excel = bool(_to_str(row.get(col_patient_id)) if col_patient_id else False)
+            entry_date = parse_date(row.get(col_entry)) if col_entry else None
+            entry_date = entry_date or date.today()
+            entry_str = format_for_storage(entry_date)
+            visit1_str = entry_str  # visit1 always = entry_date
+            v2 = parse_date(row.get(col_visit2)) if col_visit2 else None
+            v3 = parse_date(row.get(col_visit3)) if col_visit3 else None
+            final = parse_date(row.get(col_final)) if col_final else None
+            # Enforce visit order: visit2 >= visit1, visit3 >= visit2, final >= visit3
+            if v2 and v2 < entry_date:
+                v2 = None
+            if v3 and (v2 or entry_date) and v3 < (v2 or entry_date):
+                v3 = None
+            if final and (v3 or v2 or entry_date) and final < (v3 or v2 or entry_date):
+                final = None
+
             inserted = False
             for _ in range(5 if not patient_id_from_excel else 1):
                 try:
+                    district = _to_str(row.get(col_district)) if col_district else get_district_name()
+                    block = _to_str(row.get(col_block)) if col_block else None
+                    municipality = _to_str(row.get(col_municipality)) if col_municipality else None
+                    ward = _to_str(row.get(col_ward)) if col_ward else None
                     cur.execute(
                         """
                         INSERT INTO patients (
                             serial_number, patient_name, patient_id, mobile_number, village_name,
+                            district_name, block_name, municipality_name, ward_number,
                             lmp_date, edd_date, motivator_name, visit1, visit2, visit3, final_visit,
                             entry_date, record_locked, created_at, remarks
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
                         """,
                         (
                             serial_int,
@@ -192,14 +221,18 @@ def import_from_excel(
                             patient_id,
                             mobile,
                             _to_str(row.get(col_village)),
+                            district,
+                            block,
+                            municipality,
+                            ward,
                             _to_date(row.get(col_lmp)),
                             _to_date(row.get(col_edd)),
                             _to_str(row.get(col_motivator)),
-                            _to_date(row.get(col_visit1)),
-                            _to_date(row.get(col_visit2)),
-                            _to_date(row.get(col_visit3)),
-                            _to_date(row.get(col_final)),
-                            _to_date(row.get(col_entry)) or today_str,
+                            visit1_str,
+                            format_for_storage(v2) if v2 else None,
+                            format_for_storage(v3) if v3 else None,
+                            format_for_storage(final) if final else None,
+                            entry_str,
                             datetime.now().isoformat(),
                             _to_str(row.get(col_remarks)) if col_remarks else None,
                         ),
@@ -211,8 +244,6 @@ def import_from_excel(
                     if patient_id_from_excel:
                         skipped += 1
                         break
-                    entry_d = parse_date(row.get(col_entry)) if col_entry else None
-                    entry_date = entry_d or date.today()
                     patient_id = _generate_patient_id(cur, entry_date)
             if not inserted and not patient_id_from_excel:
                 skipped += 1

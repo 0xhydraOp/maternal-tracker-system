@@ -5,6 +5,8 @@ Admin area password and theme can be changed here or via settings.
 from __future__ import annotations
 
 import json
+
+APP_VERSION = "1.0.0"
 import os
 import sys
 from pathlib import Path

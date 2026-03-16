@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 from typing import List, Tuple, Any, Optional
 
 import pandas as pd
 from PySide6.QtCore import Qt, QDate, QMargins
-from datetime import timedelta
 
 from PySide6.QtCharts import (
     QBarCategoryAxis,
@@ -17,6 +16,7 @@ from PySide6.QtCharts import (
 )
 from PySide6.QtGui import QPainter
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QWidget,
     QVBoxLayout,
     QHBoxLayout,
@@ -37,6 +37,7 @@ from PySide6.QtWidgets import (
 
 from database.init_db import get_connection
 from utils.date_utils import DATE_FORMAT_DISPLAY, format_for_display, parse_date as parse_date_flex
+from services.location_service import get_block_names, get_municipality_names
 from services.motivator_service import get_all_motivator_names
 from services.visit_scheduler import get_next_visit_due
 
@@ -63,20 +64,25 @@ class ReportsWidget(QWidget):
         if idx >= 0:
             self.motivator_filter.setCurrentIndex(idx)
         self.motivator_filter.blockSignals(False)
+        self.location_type_combo.setCurrentIndex(0)
+        self.location_value_combo.setVisible(False)
+        self.location_value_combo.clear()
         self._load_data()
         self._apply_filters()
         self._load_visit_completion()
         self._load_motivator_performance()
         self._load_monthly_summary()
+        self._load_block_municipality()
         self._load_charts()
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 20, 20, 20)
         layout.setSpacing(16)
+        self.setMinimumWidth(1000)  # Ensure Reports area doesn't shrink too much
         self.tabs = QTabWidget()
         self.tabs.setDocumentMode(True)
-        self.tabs.setMinimumHeight(400)
+        self.tabs.setMinimumHeight(550)
 
         def make_date_edit():
             e = QDateEdit()
@@ -97,8 +103,10 @@ class ReportsWidget(QWidget):
         filter_bar = QHBoxLayout(filter_frame)
         filter_bar.setSpacing(12)
         self.date_preset_combo = QComboBox()
-        self.date_preset_combo.addItems(["All", "This Month", "This Year", "Custom"])
-        self.date_preset_combo.setMinimumWidth(100)
+        self.date_preset_combo.addItems([
+            "All", "Last 7 days", "Last 30 days", "This Month", "This Year", "Custom"
+        ])
+        self.date_preset_combo.setMinimumWidth(110)
         self.date_preset_combo.currentTextChanged.connect(self._on_date_preset_changed)
         filter_bar.addWidget(QLabel("Date:"))
         filter_bar.addWidget(self.date_preset_combo)
@@ -134,6 +142,21 @@ class ReportsWidget(QWidget):
         self.village_filter.setMaximumWidth(100)
         filter_bar.addWidget(self.village_filter)
 
+        filter_bar.addWidget(QLabel("Block/Municipality:"))
+        self._block_names = list(get_block_names())
+        self._municipality_names = list(get_municipality_names())
+        self.location_type_combo = QComboBox()
+        self.location_type_combo.setMinimumWidth(100)
+        self.location_type_combo.addItems(["All", "Block", "Municipality"])
+        self.location_type_combo.setCurrentIndex(0)
+        self.location_type_combo.currentTextChanged.connect(self._on_location_type_changed)
+        filter_bar.addWidget(self.location_type_combo)
+        self.location_value_combo = QComboBox()
+        self.location_value_combo.setMinimumWidth(130)
+        self.location_value_combo.setVisible(False)
+        self.location_value_combo.currentTextChanged.connect(self._apply_filters)
+        filter_bar.addWidget(self.location_value_combo)
+
         self.apply_btn = QPushButton("Apply")
         self.apply_btn.clicked.connect(self._apply_filters)
         self.export_btn = QPushButton("Export")
@@ -150,14 +173,17 @@ class ReportsWidget(QWidget):
 
         self.table = QTableWidget()
         self.table.setObjectName("dataTable")
-        self.table.setColumnCount(14)
+        self.table.setColumnCount(17)
         self.table.setHorizontalHeaderLabels(
             [
                 "Serial No",
                 "Entry Date",
                 "Patient Name",
                 "Patient ID",
+                "Block",
+                "Municipality",
                 "Village",
+                "Ward",
                 "Mobile",
                 "Motivator",
                 "LMP Date",
@@ -172,10 +198,27 @@ class ReportsWidget(QWidget):
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.setAlternatingRowColors(True)
+        self.table.setShowGrid(True)
+        self.table.setHorizontalScrollMode(QAbstractItemView.ScrollPerPixel)
+        self.table.verticalHeader().setVisible(False)
         self.table.horizontalHeader().setVisible(True)
         self.table.horizontalHeader().setStretchLastSection(True)
-        self.table.setMinimumHeight(200)
-        pt_layout.addWidget(self.table)
+        self.table.horizontalHeader().setMinimumSectionSize(80)
+        self.table.setMinimumHeight(380)
+        # Column widths so all content is fully visible; total ~1650px
+        col_widths = [70, 95, 130, 100, 110, 120, 100, 65, 100, 120, 95, 95, 90, 90, 90, 95, 110]
+        self.table.setMinimumWidth(sum(col_widths))
+        for col, width in enumerate(col_widths):
+            self.table.setColumnWidth(col, width)
+        # Wrap in scroll area so table scrolls horizontally when window is narrow
+        table_scroll = QScrollArea()
+        table_scroll.setWidget(self.table)
+        table_scroll.setWidgetResizable(False)  # Keep table size so horizontal scroll works
+        table_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        table_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        table_scroll.setFrameShape(QFrame.NoFrame)
+        table_scroll.setMinimumHeight(400)
+        pt_layout.addWidget(table_scroll)
 
         self.tabs.addTab(patient_tab, "Patients")
 
@@ -193,9 +236,14 @@ class ReportsWidget(QWidget):
         self.visit_completion_table.setHorizontalHeaderLabels(
             ["Visit", "Completed", "Total", "Pending", "Completion %"]
         )
+        self.visit_completion_table.setShowGrid(True)
         self.visit_completion_table.horizontalHeader().setVisible(True)
         self.visit_completion_table.horizontalHeader().setMinimumHeight(36)
+        self.visit_completion_table.horizontalHeader().setMinimumSectionSize(80)
         self.visit_completion_table.horizontalHeader().setStretchLastSection(True)
+        self.visit_completion_table.setMinimumWidth(480)
+        for col, w in enumerate([120, 90, 70, 80, 100]):  # Ensure numeric columns fully visible
+            self.visit_completion_table.setColumnWidth(col, w)
         v_layout.addWidget(self.visit_completion_table)
         visit_tab_layout.addWidget(visit_group)
         self.tabs.addTab(visit_tab, "Visits")
@@ -210,13 +258,18 @@ class ReportsWidget(QWidget):
         m_layout.setContentsMargins(16, 20, 16, 16)
         self.motivator_table = QTableWidget()
         self.motivator_table.setObjectName("dataTable")
-        self.motivator_table.setColumnCount(5)
+        self.motivator_table.setColumnCount(6)
         self.motivator_table.setHorizontalHeaderLabels(
-            ["Motivator", "Total", "Visit 1", "Visit 2", "Final"]
+            ["Motivator", "Total", "Visit 1", "Visit 2", "Final", "Final %"]
         )
         self.motivator_table.horizontalHeader().setVisible(True)
         self.motivator_table.horizontalHeader().setMinimumHeight(36)
+        self.motivator_table.horizontalHeader().setMinimumSectionSize(80)
         self.motivator_table.horizontalHeader().setStretchLastSection(True)
+        self.motivator_table.setMinimumWidth(500)
+        self.motivator_table.setShowGrid(True)
+        for col, w in enumerate([180, 70, 80, 80, 70, 80]):  # Ensure numeric columns fully visible
+            self.motivator_table.setColumnWidth(col, w)
         m_layout.addWidget(self.motivator_table)
         motiv_tab_layout.addWidget(motiv_group)
         self.tabs.addTab(motiv_tab, "Motivators")
@@ -237,12 +290,62 @@ class ReportsWidget(QWidget):
         )
         self.monthly_table.horizontalHeader().setVisible(True)
         self.monthly_table.horizontalHeader().setMinimumHeight(36)
+        self.monthly_table.horizontalHeader().setMinimumSectionSize(80)
         self.monthly_table.horizontalHeader().setStretchLastSection(True)
+        self.monthly_table.setMinimumWidth(550)
+        self.monthly_table.setShowGrid(True)
+        for col, w in enumerate([120, 80, 70, 80, 70, 90]):  # Month, New Reg., Visits, Overdue, EDD, Completed
+            self.monthly_table.setColumnWidth(col, w)
         mo_layout.addWidget(self.monthly_table)
         monthly_tab_layout.addWidget(monthly_group)
         self.tabs.addTab(monthly_tab, "Monthly")
 
-        # Tab 5: Charts
+        # Tab 5: Block & Municipality
+        block_muni_tab = QWidget()
+        bm_layout = QVBoxLayout(block_muni_tab)
+        bm_layout.setContentsMargins(0, 0, 0, 0)
+
+        block_group = QGroupBox("By Block")
+        block_group.setObjectName("reportsGroup")
+        bl_layout = QVBoxLayout(block_group)
+        bl_layout.setContentsMargins(16, 20, 16, 16)
+        self.block_table = QTableWidget()
+        self.block_table.setObjectName("dataTable")
+        self.block_table.setColumnCount(3)
+        self.block_table.setHorizontalHeaderLabels(["Block/Municipality", "Patients", "Visits Completed"])
+        self.block_table.horizontalHeader().setVisible(True)
+        self.block_table.horizontalHeader().setMinimumHeight(36)
+        self.block_table.horizontalHeader().setMinimumSectionSize(80)
+        self.block_table.setMinimumWidth(450)
+        self.block_table.setShowGrid(True)
+        for col, w in enumerate([240, 100, 130]):
+            self.block_table.setColumnWidth(col, w)
+        self.block_table.horizontalHeader().setStretchLastSection(False)
+        bl_layout.addWidget(self.block_table)
+        bm_layout.addWidget(block_group)
+
+        muni_group = QGroupBox("By Municipality")
+        muni_group.setObjectName("reportsGroup")
+        mu_layout = QVBoxLayout(muni_group)
+        mu_layout.setContentsMargins(16, 20, 16, 16)
+        self.municipality_table = QTableWidget()
+        self.municipality_table.setObjectName("dataTable")
+        self.municipality_table.setColumnCount(3)
+        self.municipality_table.setHorizontalHeaderLabels(["Block/Municipality", "Patients", "Visits Completed"])
+        self.municipality_table.horizontalHeader().setVisible(True)
+        self.municipality_table.horizontalHeader().setMinimumHeight(36)
+        self.municipality_table.horizontalHeader().setMinimumSectionSize(80)
+        self.municipality_table.setMinimumWidth(450)
+        self.municipality_table.setShowGrid(True)
+        for col, w in enumerate([240, 100, 130]):
+            self.municipality_table.setColumnWidth(col, w)
+        self.municipality_table.horizontalHeader().setStretchLastSection(False)
+        mu_layout.addWidget(self.municipality_table)
+        bm_layout.addWidget(muni_group)
+
+        self.tabs.addTab(block_muni_tab, "Block & Municipality")
+
+        # Tab 6: Charts
         charts_tab = QWidget()
         charts_main = QVBoxLayout(charts_tab)
         charts_main.setContentsMargins(0, 0, 0, 0)
@@ -296,6 +399,7 @@ class ReportsWidget(QWidget):
         self.motivator_chart_view = QChartView()
         self.motivator_month_chart_view = QChartView()
         self.motivator_month_chart_view.setMinimumWidth(800)
+        self.motivator_month_chart_view.setMinimumHeight(280)
         self.village_chart_view = QChartView()
 
         # Motivator month-wise: motivator selector + month/year for past 12 months
@@ -336,6 +440,7 @@ class ReportsWidget(QWidget):
         self._load_visit_completion()
         self._load_motivator_performance()
         self._load_monthly_summary()
+        self._load_block_municipality()
         self._load_charts()
 
     def _on_date_preset_changed(self, text: str) -> None:
@@ -343,6 +448,24 @@ class ReportsWidget(QWidget):
         self.from_date_edit.setVisible(show_custom)
         self.to_label.setVisible(show_custom)
         self.to_date_edit.setVisible(show_custom)
+        self._apply_filters()
+
+    def _on_location_type_changed(self, text: str) -> None:
+        """Show block or municipality dropdown when selected."""
+        self.location_value_combo.blockSignals(True)
+        self.location_value_combo.clear()
+        self.location_value_combo.setVisible(False)
+        if text == "Block":
+            self.location_value_combo.setVisible(True)
+            self.location_value_combo.addItem("All blocks")
+            self.location_value_combo.addItems(self._block_names)
+            self.location_value_combo.setCurrentIndex(0)
+        elif text == "Municipality":
+            self.location_value_combo.setVisible(True)
+            self.location_value_combo.addItem("All municipalities")
+            self.location_value_combo.addItems(self._municipality_names)
+            self.location_value_combo.setCurrentIndex(0)
+        self.location_value_combo.blockSignals(False)
         self._apply_filters()
 
     def _load_data(self) -> None:
@@ -357,7 +480,11 @@ class ReportsWidget(QWidget):
                     patient_id,
                     mobile_number,
                     motivator_name,
+                    district_name,
+                    block_name,
+                    municipality_name,
                     village_name,
+                    ward_number,
                     lmp_date,
                     edd_date,
                     visit1,
@@ -378,7 +505,13 @@ class ReportsWidget(QWidget):
         today = date.today()
         preset = self.date_preset_combo.currentText()
         from_date = to_date = None
-        if preset == "This Month":
+        if preset == "Last 7 days":
+            to_date = today
+            from_date = today - timedelta(days=6)
+        elif preset == "Last 30 days":
+            to_date = today
+            from_date = today - timedelta(days=29)
+        elif preset == "This Month":
             from_date = today.replace(day=1)
             if today.month == 12:
                 to_date = today.replace(year=today.year + 1, month=1, day=1) - timedelta(days=1)
@@ -402,6 +535,14 @@ class ReportsWidget(QWidget):
             motivator_f = ""
         name_f = self.patient_name_filter.text().strip().lower()
         village_f = self.village_filter.text().strip().lower()
+        location_type = self.location_type_combo.currentText()
+        location_val = (self.location_value_combo.currentText() or "").strip()
+        block_f = ""
+        municipality_f = ""
+        if location_type == "Block" and location_val and location_val not in ("All blocks", ""):
+            block_f = location_val.lower()
+        elif location_type == "Municipality" and location_val and location_val not in ("All municipalities", ""):
+            municipality_f = location_val.lower()
 
         def parse_date(s: Any) -> Optional[date]:
             return parse_date_flex(s)
@@ -414,7 +555,11 @@ class ReportsWidget(QWidget):
                 patient_id,
                 mobile_number,
                 motivator_name,
+                district_name,
+                block_name,
+                municipality_name,
                 village_name,
+                ward_number,
                 lmp_date,
                 edd_date,
                 visit1,
@@ -436,6 +581,10 @@ class ReportsWidget(QWidget):
                 continue
             if village_f and village_f not in str(village_name or "").lower():
                 continue
+            if block_f and str(block_name or "").lower() != block_f:
+                continue
+            if municipality_f and str(municipality_name or "").lower() != municipality_f:
+                continue
 
             filtered.append(row)
 
@@ -443,25 +592,27 @@ class ReportsWidget(QWidget):
         self.result_count_label.setText(f"{len(filtered)} record(s)")
 
     def _populate_table(self, rows: List[Tuple[Any, ...]]) -> None:
-        # Column order: Serial, Entry Date, Patient Name, Patient ID, Village, Mobile, Motivator, LMP, EDD, Visits
+        # Column order: Serial, Entry Date, Patient Name, Patient ID, Block, Municipality, Village, Ward, Mobile, Motivator, LMP, EDD, Visits, Remarks
         self.table.setRowCount(len(rows))
         for r, row in enumerate(rows):
             (serial_number, patient_name, patient_id, mobile_number, motivator_name,
-             village_name, lmp_date, edd_date, visit1, visit2, visit3, final_visit, entry_date, remarks) = row
+             _district_name, block_name, municipality_name, village_name, ward_number,
+             lmp_date, edd_date, visit1, visit2, visit3, final_visit, entry_date, remarks) = row
             display_values = [
-                serial_number, entry_date, patient_name, patient_id, village_name,
-                mobile_number, motivator_name, lmp_date, edd_date, visit1, visit2, visit3, final_visit, remarks,
+                serial_number, entry_date, patient_name, patient_id, block_name, municipality_name,
+                village_name, ward_number, mobile_number, motivator_name,
+                lmp_date, edd_date, visit1, visit2, visit3, final_visit, remarks,
             ]
             for c, value in enumerate(display_values):
-                # Date columns (1, 7-12): display as dd-mm-yyyy
-                if c in (1, 7, 8, 9, 10, 11, 12):
+                # Date columns (1, 10-15): display as dd-mm-yyyy
+                if c in (1, 10, 11, 12, 13, 14, 15):
                     d = parse_date_flex(value)
                     disp = format_for_display(d) if d else ("" if value is None else str(value))
                 else:
                     disp = "" if value is None else str(value)
                 item = QTableWidgetItem(disp)
                 self.table.setItem(r, c, item)
-        self.table.resizeColumnsToContents()
+        # Avoid resizeColumnsToContents - can cause half-visible numbers; use explicit widths
 
     def _export_to_excel(self) -> None:
         path, _ = QFileDialog.getSaveFileName(
@@ -478,7 +629,10 @@ class ReportsWidget(QWidget):
             "entry_date",
             "patient_name",
             "patient_id",
+            "block_name",
+            "municipality_name",
             "village_name",
+            "ward_number",
             "mobile_number",
             "motivator_name",
             "lmp_date",
@@ -554,7 +708,7 @@ class ReportsWidget(QWidget):
             self.visit_completion_table.setItem(r, 2, QTableWidgetItem(str(tot)))
             self.visit_completion_table.setItem(r, 3, QTableWidgetItem(str(pend)))
             self.visit_completion_table.setItem(r, 4, QTableWidgetItem(pct_str))
-        self.visit_completion_table.resizeColumnsToContents()
+        # Keep explicit column widths - avoid resizeColumnsToContents
 
     def _load_motivator_performance(self) -> None:
         """Load motivator performance report."""
@@ -580,12 +734,16 @@ class ReportsWidget(QWidget):
 
         self.motivator_table.setRowCount(len(rows))
         for r, (motivator, total, v1, v2, v4) in enumerate(rows):
+            tot = total or 0
+            final_count = v4 or 0
+            final_pct = f"{(100 * final_count / tot):.1f}%" if tot else "0%"
             self.motivator_table.setItem(r, 0, QTableWidgetItem(str(motivator)))
-            self.motivator_table.setItem(r, 1, QTableWidgetItem(str(total or 0)))
+            self.motivator_table.setItem(r, 1, QTableWidgetItem(str(tot)))
             self.motivator_table.setItem(r, 2, QTableWidgetItem(str(v1 or 0)))
             self.motivator_table.setItem(r, 3, QTableWidgetItem(str(v2 or 0)))
-            self.motivator_table.setItem(r, 4, QTableWidgetItem(str(v4 or 0)))
-        self.motivator_table.resizeColumnsToContents()
+            self.motivator_table.setItem(r, 4, QTableWidgetItem(str(final_count)))
+            self.motivator_table.setItem(r, 5, QTableWidgetItem(final_pct))
+        # Keep explicit column widths - avoid resizeColumnsToContents
 
     def _load_monthly_summary(self) -> None:
         """Load monthly summary for last 12 months."""
@@ -595,7 +753,7 @@ class ReportsWidget(QWidget):
             cur = conn.cursor()
             cur.execute(
                 """
-                SELECT entry_date, visit1, visit2, visit3, final_visit, edd_date
+                SELECT entry_date, visit1, visit2, visit3, final_visit, edd_date, record_locked
                 FROM patients
                 """
             )
@@ -616,7 +774,9 @@ class ReportsWidget(QWidget):
             new_reg = overdue = edd_in_month = completed = 0
             visits_in_month = set()  # patient indices with visit in this month
 
-            for idx, (entry_str, v1, v2, v3, final, edd_str) in enumerate(all_rows):
+            for idx, row in enumerate(all_rows):
+                entry_str, v1, v2, v3, final, edd_str = row[:6]
+                record_locked = bool(row[6]) if len(row) > 6 else False
                 ent = parse_date_flex(entry_str)
                 if ent and month_start <= ent <= month_end:
                     new_reg += 1
@@ -637,8 +797,9 @@ class ReportsWidget(QWidget):
                         visits_in_month.add(idx)
                         break
 
-                next_due = get_next_visit_due(v1_d, v2_d, v3_d, final_d, today)
-                if next_due and month_start <= next_due <= month_end:
+                next_due = get_next_visit_due(v1_d, v2_d, v3_d, final_d, today, record_locked=record_locked)
+                # Only count overdue when next_due is in the month AND has passed (truly overdue)
+                if next_due and month_start <= next_due <= month_end and next_due < today:
                     has_visit_in_month = any(
                         v and month_start <= v <= month_end
                         for v in (v1_d, v2_d, v3_d, final_d)
@@ -659,7 +820,58 @@ class ReportsWidget(QWidget):
         for r, row in enumerate(months_data):
             for c, val in enumerate(row):
                 self.monthly_table.setItem(r, c, QTableWidgetItem(val))
-        self.monthly_table.resizeColumnsToContents()
+        # Keep explicit column widths - do not resize to avoid half-visible numbers
+
+    def _load_block_municipality(self) -> None:
+        """Load block-wise and municipality-wise patient and visit counts."""
+        conn = get_connection()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT block_name, COUNT(*) as patients,
+                    SUM(CASE WHEN final_visit IS NOT NULL AND final_visit != '' THEN 1 ELSE 0 END) as completed
+                FROM patients
+                WHERE block_name IS NOT NULL AND block_name != ''
+                GROUP BY block_name
+                """
+            )
+            block_data = {r[0]: (r[1], r[2]) for r in cur.fetchall()}
+
+            block_table_data = []
+            for b in get_block_names():
+                p, c = block_data.get(b, (0, 0))
+                block_table_data.append((b, str(p), str(c)))
+
+            self.block_table.setRowCount(len(block_table_data))
+            for r, (name, patients, completed) in enumerate(block_table_data):
+                self.block_table.setItem(r, 0, QTableWidgetItem(name))
+                self.block_table.setItem(r, 1, QTableWidgetItem(patients))
+                self.block_table.setItem(r, 2, QTableWidgetItem(completed))
+
+            cur.execute(
+                """
+                SELECT municipality_name, COUNT(*) as patients,
+                    SUM(CASE WHEN final_visit IS NOT NULL AND final_visit != '' THEN 1 ELSE 0 END) as completed
+                FROM patients
+                WHERE municipality_name IS NOT NULL AND municipality_name != ''
+                GROUP BY municipality_name
+                """
+            )
+            muni_data = {r[0]: (r[1], r[2]) for r in cur.fetchall()}
+
+            muni_table_data = []
+            for m in get_municipality_names():
+                p, c = muni_data.get(m, (0, 0))
+                muni_table_data.append((m, str(p), str(c)))
+
+            self.municipality_table.setRowCount(len(muni_table_data))
+            for r, (name, patients, completed) in enumerate(muni_table_data):
+                self.municipality_table.setItem(r, 0, QTableWidgetItem(name))
+                self.municipality_table.setItem(r, 1, QTableWidgetItem(patients))
+                self.municipality_table.setItem(r, 2, QTableWidgetItem(completed))
+        finally:
+            conn.close()
 
     def _load_registrations_chart(self) -> None:
         """Load registrations chart for 12 months ending with selected month/year."""
@@ -733,7 +945,7 @@ class ReportsWidget(QWidget):
                     m -= 12
                     y += 1
                 month_start = date(y, m, 1)
-                categories.append(month_start.strftime("%b %Y"))
+                categories.append(month_start.strftime("%b '%y"))
             reg_set = QBarSet("Registrations")
             reg_set.append([0] * 12)
             reg_series = QBarSeries()
@@ -742,7 +954,7 @@ class ReportsWidget(QWidget):
             motiv_chart.addSeries(reg_series)
             motiv_chart.setTitle("Select a motivator to view their month-wise performance")
             motiv_chart.setAnimationOptions(QChart.SeriesAnimations)
-            motiv_chart.setMargins(QMargins(10, 10, 10, 70))
+            motiv_chart.setMargins(QMargins(45, 10, 10, 85))
             axis_x = QBarCategoryAxis()
             axis_x.append(categories)
             axis_x.setLabelsAngle(-45)
@@ -783,7 +995,7 @@ class ReportsWidget(QWidget):
             month_end = date(y, 12, 31) if m == 12 else date(y, m + 1, 1) - timedelta(days=1)
             count = sum(1 for d in entry_dates if d and month_start <= d <= month_end)
             month_data.append(count)
-            categories.append(month_start.strftime("%b %Y"))
+            categories.append(month_start.strftime("%b '%y"))
 
         reg_set = QBarSet("Registrations")
         reg_set.append(month_data)
@@ -793,7 +1005,7 @@ class ReportsWidget(QWidget):
         motiv_chart.addSeries(reg_series)
         motiv_chart.setTitle(f"Registrations per Month: {motivator}")
         motiv_chart.setAnimationOptions(QChart.SeriesAnimations)
-        motiv_chart.setMargins(QMargins(10, 10, 10, 70))
+        motiv_chart.setMargins(QMargins(45, 10, 10, 85))
         axis_x = QBarCategoryAxis()
         axis_x.append(categories)
         axis_x.setLabelsAngle(-45)

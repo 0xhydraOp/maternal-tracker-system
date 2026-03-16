@@ -310,8 +310,7 @@ def get_stylesheet(dark_mode: bool = False) -> str:
             font-family: "Segoe UI", Arial, sans-serif;
             border: none;
             border-bottom: 2px solid #1a252f;
-            border-right: 1px solid #3d4f5f;
-            padding: 10px 12px;
+            padding: 8px;
             min-height: 36px;
         }
 
@@ -405,9 +404,15 @@ def get_stylesheet(dark_mode: bool = False) -> str:
             font-weight: bold;
             font-size: 13px;
             font-family: "Segoe UI", Arial, sans-serif;
-            padding: 10px 10px;
+            border: none;
+            border-bottom: 2px solid #1a252f;
+            padding: 8px;
             min-height: 44px;
             min-width: 80px;
+        }
+
+        QTableWidget::item, QTableView::item {
+            padding: 6px 8px;
         }
 
         QFrame#reportsFilterBar {
@@ -743,8 +748,7 @@ def get_stylesheet(dark_mode: bool = False) -> str:
             font-family: "Segoe UI", Arial, sans-serif;
             border: none;
             border-bottom: 2px solid #1a252f;
-            border-right: 1px solid #3d4f5f;
-            padding: 10px 12px;
+            padding: 8px;
             min-height: 36px;
         }
 
@@ -845,9 +849,15 @@ def get_stylesheet(dark_mode: bool = False) -> str:
             font-weight: bold;
             font-size: 13px;
             font-family: "Segoe UI", Arial, sans-serif;
-            padding: 10px 10px;
+            border: none;
+            border-bottom: 2px solid #1a5fd0;
+            padding: 8px;
             min-height: 44px;
             min-width: 80px;
+        }
+
+        QTableWidget::item, QTableView::item {
+            padding: 6px 8px;
         }
 
         QTableWidget#patientSearchTable {

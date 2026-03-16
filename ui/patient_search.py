@@ -4,29 +4,29 @@ from datetime import date, timedelta
 from typing import List, Tuple, Any
 
 import pandas as pd
-from PySide6.QtCore import Qt, QDate, QSettings
+from PySide6.QtCore import QEvent, QObject, Qt, QDate, QSettings, QTimer
 from PySide6.QtGui import QShortcut, QKeySequence
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
     QComboBox,
+    QCompleter,
     QDateEdit,
     QDialog,
     QHeaderView,
     QLabel,
-    QStyledItemDelegate,
-    QVBoxLayout,
-    QHBoxLayout,
-    QFormLayout,
     QLineEdit,
     QPushButton,
+    QStyledItemDelegate,
     QTableWidget,
     QTableWidgetItem,
     QFileDialog,
     QMessageBox,
+    QVBoxLayout,
+    QHBoxLayout,
+    QWidget,
 )
 
-from config import get_dark_mode
 from database.init_db import get_connection
 from utils.date_utils import (
     DATE_FORMAT_DISPLAY,
@@ -37,8 +37,9 @@ from utils.date_utils import (
     EMPTY_DATE_SENTINEL_ALT,
 )
 from services.change_logger import log_change
+from services.location_service import get_block_names, get_municipality_names
 from services.motivator_service import get_all_motivator_names
-from services.visit_scheduler import UPCOMING_DAYS, EDD_UPCOMING_DAYS, VISIT_INTERVAL_DAYS, get_next_visit_due
+from services.visit_scheduler import UPCOMING_DAYS, EDD_UPCOMING_DAYS, get_next_visit_due
 from ui.patient_entry import PatientEntryDialog
 
 
@@ -82,6 +83,24 @@ class DateEditDelegate(QStyledItemDelegate):
         editor.setGeometry(option.rect)
 
 
+class TableEnterKeyFilter(QObject):
+    """Event filter: Enter key on table opens selected patient."""
+
+    def __init__(self, table: QTableWidget, callback, parent=None):
+        super().__init__(parent)
+        self._table = table
+        self._callback = callback
+
+    def eventFilter(self, obj, event):
+        if obj == self._table and event.type() == QEvent.KeyPress:
+            if event.key() in (Qt.Key_Return, Qt.Key_Enter):
+                row = self._table.currentRow()
+                if row >= 0:
+                    self._callback(row, 0)
+                    return True
+        return super().eventFilter(obj, event)
+
+
 class PatientSearchDialog(QDialog):
     """
     Patient search and export dialog.
@@ -95,14 +114,19 @@ class PatientSearchDialog(QDialog):
         role: str = "STAFF",
         parent=None,
         filter_mode: str | None = None,
+        status_callback=None,
     ):
         super().__init__(parent)
         self.username = username
         self.role = role.upper() if role else "STAFF"
         self._filter_mode = filter_mode  # "due_soon", "overdue", "edd_30", "today_entries", "all"
+        self._status_callback = status_callback
         self.setWindowTitle("All Patient Records" if filter_mode == "all" else "Patient Search")
 
         self._all_rows: List[Tuple[Any, ...]] = []
+        self._filter_debounce_timer = QTimer(self)
+        self._filter_debounce_timer.setSingleShot(True)
+        self._filter_debounce_timer.timeout.connect(self._apply_filters)
 
         self._build_ui()
         QShortcut(QKeySequence("Escape"), self, self.reject)
@@ -142,6 +166,24 @@ class PatientSearchDialog(QDialog):
         date_filter_bar.addWidget(self.from_date_edit)
         date_filter_bar.addWidget(self.to_label)
         date_filter_bar.addWidget(self.to_date_edit)
+        date_filter_bar.addSpacing(24)
+        date_filter_bar.addWidget(QLabel("Filter by Block/Municipality:"))
+        self._block_names = list(get_block_names())
+        self._municipality_names = list(get_municipality_names())
+        self.location_type_combo = QComboBox()
+        self.location_type_combo.setMinimumWidth(140)
+        self.location_type_combo.setMinimumHeight(28)
+        self.location_type_combo.addItems(["All", "Block", "Municipality"])
+        self.location_type_combo.setCurrentIndex(0)
+        self.location_type_combo.currentTextChanged.connect(self._on_location_type_changed)
+        date_filter_bar.addWidget(self.location_type_combo)
+        self.location_value_combo = QComboBox()
+        self.location_value_combo.setMinimumWidth(160)
+        self.location_value_combo.setMinimumHeight(28)
+        self.location_value_combo.setVisible(False)
+        self.location_value_combo.setEditable(True)
+        self.location_value_combo.currentTextChanged.connect(self._schedule_filter)
+        date_filter_bar.addWidget(self.location_value_combo)
         date_filter_bar.addStretch()
         layout.addLayout(date_filter_bar)
 
@@ -167,31 +209,31 @@ class PatientSearchDialog(QDialog):
         self.village_filter = QLineEdit()
         self.village_filter.setPlaceholderText("Village")
         self.village_filter.setMinimumWidth(100)
-        self.entry_date_filter = QLineEdit()
-        self.entry_date_filter.setPlaceholderText("Entry Date")
-        self.entry_date_filter.setMinimumWidth(90)
 
         filter_bar.addWidget(self.name_filter)
         filter_bar.addWidget(self.patient_id_filter)
         filter_bar.addWidget(self.mobile_filter)
         filter_bar.addWidget(self.motivator_filter)
         filter_bar.addWidget(self.village_filter)
-        filter_bar.addWidget(self.entry_date_filter)
 
         layout.addLayout(filter_bar)
 
         # Action buttons
         btn_row = QHBoxLayout()
         self.search_btn = QPushButton("Search")
+        self.search_btn.setToolTip("Apply filters to search patients")
         self.search_btn.clicked.connect(self._apply_filters)
         self.refresh_btn = QPushButton("Refresh")
         self.refresh_btn.setToolTip("Reload data from database")
         self.refresh_btn.clicked.connect(self._on_refresh)
         self.clear_btn = QPushButton("Clear")
+        self.clear_btn.setToolTip("Clear all filters")
         self.clear_btn.clicked.connect(self.clear_filters)
-        self.export_btn = QPushButton("Export All to Excel")
+        self.export_btn = QPushButton("Export to Excel")
+        self.export_btn.setToolTip("Export filtered results to Excel")
         self.export_btn.clicked.connect(self.export_to_excel)
         self.export_selected_btn = QPushButton("Export Selected")
+        self.export_selected_btn.setToolTip("Export only selected rows to Excel")
         self.export_selected_btn.clicked.connect(self.export_selected_to_excel)
 
         btn_row.addWidget(self.search_btn)
@@ -204,33 +246,36 @@ class PatientSearchDialog(QDialog):
         layout.addLayout(btn_row)
 
         # Table with native header - always visible, styled via styles.py
-        self._col_widths = [75, 130, 100, 100, 110, 110, 100, 100, 90, 90, 95, 95, 70, 120]
+        self._col_widths = [75, 130, 100, 100, 100, 110, 100, 70, 110, 100, 90, 90, 95, 95, 70, 120, 100]
         self.table = QTableWidget()
         self.table.setObjectName("patientSearchTable")
-        self.table.setColumnCount(14)
+        self.table.setColumnCount(17)
         self.table.setHorizontalHeaderLabels([
-            "Serial No", "Entry Date", "Patient Name", "Patient ID", "Village",
-            "Mobile", "Motivator", "LMP Date", "EDD Date", "1st Visit",
+            "Serial No", "Entry Date", "Patient Name", "Patient ID", "Block", "Municipality",
+            "Village", "Ward", "Mobile", "Motivator", "LMP Date", "EDD Date", "1st Visit",
             "2nd Visit", "3rd Visit", "Final Visit", "Remarks",
         ])
         h_header = self.table.horizontalHeader()
         h_header.setVisible(True)
         h_header.setMinimumHeight(44)
         self.table.verticalHeader().setVisible(False)  # We have Serial No column; avoid dark row-number bar
-        for col in range(14):
+        for col in range(17):
             self.table.setColumnWidth(col, self._col_widths[col])
         self.table.setEditTriggers(QTableWidget.DoubleClicked)
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.setSelectionMode(QTableWidget.ExtendedSelection)
         self.table.setAlternatingRowColors(False)  # Avoid rows looking "selected" by default
         h_header.setStretchLastSection(True)
-        for col in range(13):
+        for col in range(16):
             h_header.setSectionResizeMode(col, QHeaderView.Interactive)
         self.table.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
+        self.table.setHorizontalScrollMode(QAbstractItemView.ScrollPerPixel)
+        self.table.setShowGrid(True)
         self.table.cellDoubleClicked.connect(self._on_cell_double_clicked)
         self.table.itemChanged.connect(self._on_item_changed)
+        self.table.installEventFilter(TableEnterKeyFilter(self.table, self.open_selected_patient, self))
         date_delegate = DateEditDelegate(self.table)
-        for col in (1, 7, 8, 9, 10, 11, 12):  # Entry Date, LMP, EDD, visits
+        for col in (1, 10, 11, 12, 13, 14, 15):  # Entry Date, LMP, EDD, visits
             self.table.setItemDelegateForColumn(col, date_delegate)
         layout.addWidget(self.table, 1)
 
@@ -245,9 +290,9 @@ class PatientSearchDialog(QDialog):
         self.status_bar.addWidget(self.loading_label)
         layout.addLayout(self.status_bar)
 
-        # Columns: 0=Serial, 1=EntryDate, 2=Name, 3=PatientID, 4=Village, 5=Mobile, 6=Motivator, 7=LMP, 8=EDD, 9-12=Visits, 13=Remarks
-        self._editable_cols = {8, 9, 10, 11, 12, 13}  # EDD, 1st/2nd/3rd/Final Visit, Remarks (Entry Date read-only)
-        self._date_cols = {8, 9, 10, 11, 12}
+        # Columns: 0=Serial, 1=EntryDate, 2=Name, 3=PatientID, 4=Block, 5=Municipality, 6=Village, 7=Ward, 8=Mobile, 9=Motivator, 10=LMP, 11=EDD, 12-15=Visits, 16=Remarks
+        self._editable_cols = {11, 12, 13, 14, 15, 16}  # EDD, 1st/2nd/3rd/Final Visit, Remarks (Entry Date read-only)
+        self._date_cols = {11, 12, 13, 14, 15}
         self._patient_id_col = 3
         self._suppress_item_changed = False
 
@@ -259,13 +304,50 @@ class PatientSearchDialog(QDialog):
         self.from_date_edit.dateChanged.connect(self._apply_filters)
         self.to_date_edit.dateChanged.connect(self._apply_filters)
 
-        # Live filtering
-        self.name_filter.textChanged.connect(self._apply_filters)
-        self.patient_id_filter.textChanged.connect(self._apply_filters)
-        self.mobile_filter.textChanged.connect(self._apply_filters)
-        self.motivator_filter.currentTextChanged.connect(self._apply_filters)
-        self.village_filter.textChanged.connect(self._apply_filters)
-        self.entry_date_filter.textChanged.connect(self._apply_filters)
+        # Live filtering (debounced)
+        self.name_filter.textChanged.connect(self._schedule_filter)
+        self.patient_id_filter.textChanged.connect(self._schedule_filter)
+        self.mobile_filter.textChanged.connect(self._schedule_filter)
+        self.motivator_filter.currentTextChanged.connect(self._schedule_filter)
+        self.village_filter.textChanged.connect(self._schedule_filter)
+
+    def _schedule_filter(self) -> None:
+        """Debounce live filtering (250 ms) to avoid lag while typing."""
+        self._filter_debounce_timer.stop()
+        self._filter_debounce_timer.start(250)
+
+    def _on_location_type_changed(self, text: str) -> None:
+        """When Block or Municipality selected, show the value combo with searchable names."""
+        self.location_value_combo.blockSignals(True)
+        self.location_value_combo.clear()
+        self.location_value_combo.setCompleter(None)
+        self.location_value_combo.setVisible(False)
+        if text == "Block":
+            self.location_value_combo.setVisible(True)
+            self.location_value_combo.lineEdit().setPlaceholderText("Type or select block...")
+            self.location_value_combo.addItem("Select block...")
+            self.location_value_combo.addItems(self._block_names)
+            self.location_value_combo.setCurrentIndex(0)
+            completer = QCompleter(self._block_names)
+            completer.setCaseSensitivity(Qt.CaseInsensitive)
+            completer.setFilterMode(Qt.MatchContains)
+            completer.setModelSorting(QCompleter.UnsortedModel)
+            completer.setCompletionMode(QCompleter.PopupCompletion)
+            self.location_value_combo.setCompleter(completer)
+        elif text == "Municipality":
+            self.location_value_combo.setVisible(True)
+            self.location_value_combo.lineEdit().setPlaceholderText("Type or select municipality...")
+            self.location_value_combo.addItem("Select municipality...")
+            self.location_value_combo.addItems(self._municipality_names)
+            self.location_value_combo.setCurrentIndex(0)
+            completer = QCompleter(self._municipality_names)
+            completer.setCaseSensitivity(Qt.CaseInsensitive)
+            completer.setFilterMode(Qt.MatchContains)
+            completer.setModelSorting(QCompleter.UnsortedModel)
+            completer.setCompletionMode(QCompleter.PopupCompletion)
+            self.location_value_combo.setCompleter(completer)
+        self.location_value_combo.blockSignals(False)
+        self._apply_filters()
 
     def _on_refresh(self) -> None:
         """Reload data from database."""
@@ -274,7 +356,7 @@ class PatientSearchDialog(QDialog):
     def _restore_column_widths(self) -> None:
         """Restore saved column widths from settings."""
         settings = QSettings("MaternalTracker", "PatientSearch")
-        for col in range(14):
+        for col in range(17):
             w = settings.value(f"col_{col}", None, type=int)
             if w is not None and w > 0:
                 self.table.setColumnWidth(col, w)
@@ -282,7 +364,7 @@ class PatientSearchDialog(QDialog):
     def _save_column_widths(self) -> None:
         """Save column widths to settings."""
         settings = QSettings("MaternalTracker", "PatientSearch")
-        for col in range(14):
+        for col in range(17):
             settings.setValue(f"col_{col}", self.table.columnWidth(col))
 
     def closeEvent(self, event) -> None:
@@ -299,9 +381,10 @@ class PatientSearchDialog(QDialog):
 
     def _load_all_patients(self) -> None:
         self.loading_label.setText("Loading...")
-        QApplication.processEvents()
-        conn = get_connection()
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        conn = None
         try:
+            conn = get_connection()
             cur = conn.cursor()
             cur.execute(
                 """
@@ -311,7 +394,11 @@ class PatientSearchDialog(QDialog):
                     patient_id,
                     mobile_number,
                     motivator_name,
+                    district_name,
+                    block_name,
+                    municipality_name,
                     village_name,
+                    ward_number,
                     lmp_date,
                     edd_date,
                     visit1,
@@ -327,7 +414,9 @@ class PatientSearchDialog(QDialog):
             )
             self._all_rows = cur.fetchall()
         finally:
-            conn.close()
+            if conn is not None:
+                conn.close()
+            QApplication.restoreOverrideCursor()
 
         self._apply_filters()
 
@@ -340,8 +429,15 @@ class PatientSearchDialog(QDialog):
         pid_f = self.patient_id_filter.text().strip().lower()
         mobile_f = self.mobile_filter.text().strip().lower()
         motivator_f = self.motivator_filter.currentText().strip().lower()
+        location_type = self.location_type_combo.currentText()
+        location_val = self.location_value_combo.currentText().strip()
+        block_f = ""
+        municipality_f = ""
+        if location_type == "Block" and location_val and location_val not in ("Select block...", ""):
+            block_f = location_val.lower()
+        elif location_type == "Municipality" and location_val and location_val not in ("Select municipality...", ""):
+            municipality_f = location_val.lower()
         village_f = self.village_filter.text().strip().lower()
-        entry_f = self.entry_date_filter.text().strip().lower()
 
         def parse_date(s: Any) -> date | None:
             return parse_date_flex(s)
@@ -371,7 +467,11 @@ class PatientSearchDialog(QDialog):
                 patient_id,
                 mobile_number,
                 motivator_name,
+                district_name,
+                block_name,
+                municipality_name,
                 village_name,
+                ward_number,
                 lmp_date,
                 edd_date,
                 visit1,
@@ -391,9 +491,11 @@ class PatientSearchDialog(QDialog):
                 return False
             if motivator_f and motivator_f.lower() != "motivator" and motivator_f not in str(motivator_name or "").lower():
                 return False
-            if village_f and village_f not in str(village_name or "").lower():
+            if block_f and str(block_name or "").lower() != block_f:
                 return False
-            if entry_f and entry_f not in str(entry_date or "").lower():
+            if municipality_f and str(municipality_name or "").lower() != municipality_f:
+                return False
+            if village_f and village_f not in str(village_name or "").lower():
                 return False
 
             # Entry date range filter
@@ -404,21 +506,12 @@ class PatientSearchDialog(QDialog):
 
             if self._filter_mode == "due_soon":
                 v1, v2, v3, v4 = parse_date(visit1), parse_date(visit2), parse_date(visit3), parse_date(final_visit)
-                future = [d for d in (v1, v2, v3, v4) if d and d > today]
-                if future:
-                    next_due = min(future)
-                else:
-                    if v4 and v4 <= today:
-                        return False  # Final done = no next visit
-                    completed = [d for d in (v1, v2, v3, v4) if d and d <= today]
-                    if not completed:
-                        return False
-                    next_due = max(completed) + timedelta(days=VISIT_INTERVAL_DAYS)
-                if not (today <= next_due <= upcoming_limit):
+                next_due = get_next_visit_due(v1, v2, v3, v4, today, record_locked=bool(_record_locked))
+                if not next_due or not (today <= next_due <= upcoming_limit):
                     return False
             elif self._filter_mode == "overdue":
                 v1, v2, v3, v4 = parse_date(visit1), parse_date(visit2), parse_date(visit3), parse_date(final_visit)
-                next_due = get_next_visit_due(v1, v2, v3, v4, today)
+                next_due = get_next_visit_due(v1, v2, v3, v4, today, record_locked=bool(_record_locked))
                 if not next_due or next_due >= today:
                     return False
             elif self._filter_mode == "edd_30":
@@ -432,10 +525,7 @@ class PatientSearchDialog(QDialog):
 
             return True
 
-        # Loading indicator
         self.loading_label.setText("Loading...")
-        QApplication.processEvents()
-
         filtered = [row for row in self._all_rows if matches(row)]
         self._populate_table(filtered)
 
@@ -454,7 +544,11 @@ class PatientSearchDialog(QDialog):
                 patient_id,
                 mobile_number,
                 motivator_name,
+                district_name,
+                block_name,
+                municipality_name,
                 village_name,
+                ward_number,
                 lmp_date,
                 edd_date,
                 visit1,
@@ -471,7 +565,10 @@ class PatientSearchDialog(QDialog):
                 _entry_date,
                 patient_name,
                 patient_id,
+                block_name,
+                municipality_name,
                 village_name,
+                ward_number,
                 mobile_number,
                 motivator_name,
                 lmp_date,
@@ -485,7 +582,7 @@ class PatientSearchDialog(QDialog):
 
             for c, value in enumerate(display_values):
                 # Date columns: display as dd-mm-yyyy
-                if c in (1, 7, 8, 9, 10, 11, 12):
+                if c in (1, 10, 11, 12, 13, 14, 15):
                     d = parse_date_flex(value)
                     disp = format_for_display(d) if d else ("" if value is None else str(value))
                 else:
@@ -500,7 +597,7 @@ class PatientSearchDialog(QDialog):
                     item.setFlags(item.flags() & ~Qt.ItemIsEditable)
                 self.table.setItem(r, c, item)
 
-        self.table.resizeColumnsToContents()
+        # Avoid resizeColumnsToContents - it overrides user's saved column widths
         self._suppress_item_changed = False
 
         # Clear selection - nothing selected until user explicitly selects
@@ -518,8 +615,10 @@ class PatientSearchDialog(QDialog):
         self.patient_id_filter.clear()
         self.mobile_filter.clear()
         self.motivator_filter.setCurrentIndex(0)  # Reset to "Motivator" (no filter)
+        self.location_type_combo.setCurrentIndex(0)  # Reset to "All"
+        self.location_value_combo.setVisible(False)
+        self.location_value_combo.clear()
         self.village_filter.clear()
-        self.entry_date_filter.clear()
         self.date_filter_combo.setCurrentIndex(0)  # Reset to "All"
 
         self._apply_filters()
@@ -567,11 +666,85 @@ class PatientSearchDialog(QDialog):
                 self._suppress_item_changed = False
                 return
             new_val = format_for_storage(parsed)
-        field_map = {8: "edd_date", 9: "visit1", 10: "visit2", 11: "visit3", 12: "final_visit", 13: "remarks"}
+        field_map = {11: "edd_date", 12: "visit1", 13: "visit2", 14: "visit3", 15: "final_visit", 16: "remarks"}
         field = field_map[col]
         conn = get_connection()
         try:
             cur = conn.cursor()
+            # Validate visit order for date fields
+            if field in ("visit1", "visit2", "visit3", "final_visit") and new_val:
+                cur.execute(
+                    "SELECT entry_date, visit1, visit2, visit3, final_visit FROM patients WHERE patient_id = ?",
+                    (patient_id,),
+                )
+                row_data = cur.fetchone()
+                if row_data:
+                    entry_str, v1_str, v2_str, v3_str, final_str = row_data
+                    entry_d = parse_date_flex(entry_str)
+                    v1_d = parse_date_flex(v1_str)
+                    v2_d = parse_date_flex(v2_str)
+                    v3_d = parse_date_flex(v3_str)
+                    final_d = parse_date_flex(final_str)
+                    new_d = parse_date_flex(new_val) if isinstance(new_val, str) else None
+                    if new_d:
+                        if field == "visit1":
+                            # 1st Visit must equal Entry Date - update both together
+                            new_val = format_for_storage(new_d)
+                            cur.execute(
+                                "UPDATE patients SET visit1 = ?, entry_date = ? WHERE patient_id = ?",
+                                (new_val, new_val, patient_id),
+                            )
+                            log_change(
+                                patient_id=patient_id,
+                                field_name="visit1",
+                                old_value=v1_str,
+                                new_value=new_val,
+                                changed_by=self.username,
+                            )
+                            log_change(
+                                patient_id=patient_id,
+                                field_name="entry_date",
+                                old_value=entry_str,
+                                new_value=new_val,
+                                changed_by=self.username,
+                            )
+                            conn.commit()
+                            self._suppress_item_changed = True
+                            self._apply_filters()
+                            self._suppress_item_changed = False
+                            return
+                        elif field == "visit2":
+                            if v1_d and new_d < v1_d:
+                                QMessageBox.warning(
+                                    self, "Validation",
+                                    "2nd Visit cannot be before 1st Visit.",
+                                )
+                                self._suppress_item_changed = True
+                                self._apply_filters()
+                                self._suppress_item_changed = False
+                                return
+                        elif field == "visit3":
+                            if v2_d and new_d < v2_d:
+                                QMessageBox.warning(
+                                    self, "Validation",
+                                    "3rd Visit cannot be before 2nd Visit.",
+                                )
+                                self._suppress_item_changed = True
+                                self._apply_filters()
+                                self._suppress_item_changed = False
+                                return
+                        elif field == "final_visit":
+                            prev = v3_d or v2_d or v1_d
+                            if prev and new_d < prev:
+                                QMessageBox.warning(
+                                    self, "Validation",
+                                    "Final Visit cannot be before the previous visit.",
+                                )
+                                self._suppress_item_changed = True
+                                self._apply_filters()
+                                self._suppress_item_changed = False
+                                return
+
             cur.execute(
                 f"SELECT {field} FROM patients WHERE patient_id = ?",
                 (patient_id,),
@@ -626,6 +799,7 @@ class PatientSearchDialog(QDialog):
         if not path:
             return
 
+        QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
             # Build a DataFrame from the currently displayed table rows
             headers = [
@@ -633,7 +807,10 @@ class PatientSearchDialog(QDialog):
                 "entry_date",
                 "patient_name",
                 "patient_id",
+                "block_name",
+                "municipality_name",
                 "village_name",
+                "ward_number",
                 "mobile_number",
                 "motivator_name",
                 "lmp_date",
@@ -661,7 +838,11 @@ class PatientSearchDialog(QDialog):
                 f"Could not export to Excel:\n{exc}",
             )
             return
+        finally:
+            QApplication.restoreOverrideCursor()
 
+        if self._status_callback:
+            self._status_callback(f"Exported {len(df)} record(s) to Excel.")
         QMessageBox.information(
             self,
             "Export Complete",
@@ -696,33 +877,39 @@ class PatientSearchDialog(QDialog):
         if not path:
             return
 
-        headers = [
-            "serial_number",
-            "entry_date",
-            "patient_name",
-            "patient_id",
-            "village_name",
-            "mobile_number",
-            "motivator_name",
-            "lmp_date",
-            "edd_date",
-            "visit1",
-            "visit2",
-            "visit3",
-            "final_visit",
-            "remarks",
-        ]
-        data: List[dict] = []
-        for row in rows:
-            row_data = {}
-            for col, key in enumerate(headers):
-                item = self.table.item(row, col)
-                row_data[key] = item.text() if item is not None else ""
-            data.append(row_data)
-
+        QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
+            headers = [
+                "serial_number",
+                "entry_date",
+                "patient_name",
+                "patient_id",
+                "block_name",
+                "municipality_name",
+                "village_name",
+                "ward_number",
+                "mobile_number",
+                "motivator_name",
+                "lmp_date",
+                "edd_date",
+                "visit1",
+                "visit2",
+                "visit3",
+                "final_visit",
+                "remarks",
+            ]
+            data: List[dict] = []
+            for row in rows:
+                row_data = {}
+                for col, key in enumerate(headers):
+                    item = self.table.item(row, col)
+                    row_data[key] = item.text() if item is not None else ""
+                data.append(row_data)
+
             df = pd.DataFrame(data)
             df.to_excel(path, index=False, engine="openpyxl")
+            if self._status_callback:
+                self._status_callback(f"Exported {len(df)} selected record(s) to Excel.")
             QMessageBox.information(
                 self,
                 "Export Complete",
@@ -734,4 +921,6 @@ class PatientSearchDialog(QDialog):
                 "Export Failed",
                 f"Could not export to Excel:\n{exc}",
             )
+        finally:
+            QApplication.restoreOverrideCursor()
 
