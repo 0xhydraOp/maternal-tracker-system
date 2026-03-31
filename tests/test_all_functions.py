@@ -220,8 +220,9 @@ class TestMotivatorService(unittest.TestCase):
     def test_get_all_motivator_names(self):
         from services.motivator_service import get_all_motivator_names
         names = get_all_motivator_names()
-        self.assertGreater(len(names), 0)
-        self.assertIsInstance(names[0], str)
+        self.assertIsInstance(names, list)
+        for n in names:
+            self.assertIsInstance(n, str)
 
     def test_add_custom_motivator(self):
         from services.motivator_service import add_custom_motivator, get_all_motivator_names

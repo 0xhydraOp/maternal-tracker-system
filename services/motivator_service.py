@@ -1,5 +1,6 @@
 """
-Service for motivator names: base list + custom names from "Others" > "Please specify".
+Service for motivator names: admin-added custom_motivators + names from "Others" > "Please specify".
+Optional MOTIVATOR_NAMES in patient_entry is usually empty; populate via Administration > Motivators.
 """
 from __future__ import annotations
 
@@ -9,7 +10,7 @@ from database.init_db import get_connection
 
 
 def get_all_motivator_names() -> List[str]:
-    """Return base motivator names + custom names added via Others > Please specify."""
+    """Return MOTIVATOR_NAMES (if any) + custom_motivators from DB."""
     from ui.patient_entry import MOTIVATOR_NAMES  # lazy import to avoid circular
 
     conn = get_connection()

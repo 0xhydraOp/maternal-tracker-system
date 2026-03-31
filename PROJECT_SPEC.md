@@ -23,7 +23,7 @@ The application runs entirely offline and is compiled into a Windows `.exe` usin
 
 The system manages:
 - Patient records (with village, motivator, remarks)
-- Motivator tracking (built-in + custom motivators)
+- Motivator tracking (admin-managed custom list + "Others" free text; no shipped preset names)
 - Visit scheduling (1st, 2nd, 3rd, Final Visit)
 - Visit reminders (due soon, overdue)
 - Role-based access (ADMIN / STAFF)
